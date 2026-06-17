@@ -17,6 +17,7 @@ token*.json
 # Node / frontend
 node_modules/
 frontend/dist/
+*.tsbuildinfo
 
 # graphify
 graphify-out/cache/
@@ -26,3 +27,6 @@ graphify-out/cost.json
 # OS / editor
 .DS_Store
 *.log
+
+# Local tooling artifacts (Playwright MCP snapshots/screenshots)
+.playwright-mcp/
