@@ -1,6 +1,7 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { BsMicFill, BsMicMuteFill } from 'react-icons/bs'
 
+import { api } from './api/client'
 import ChatInput from './components/Chat/ChatInput'
 import ChatModal from './components/Chat/ChatModal'
 import HamburgerMenu from './components/Menu/HamburgerMenu'
@@ -26,8 +27,33 @@ function App() {
   const messages = useMeridianStore((state) => state.messages)
   const chatOpen = useMeridianStore((state) => state.chatOpen)
   const setChatOpen = useMeridianStore((state) => state.setChatOpen)
+  const setMessages = useMeridianStore((state) => state.setMessages)
   const { send, sending } = useChat()
   const { recording, supported, toggleRecording } = useVoice()
+
+  // Pre-load the recent conversation from the database so a refresh keeps the
+  // thread intact. Best-effort: if the API is down the screen stays usable.
+  useEffect(() => {
+    let cancelled = false
+    api
+      .getMessages()
+      .then((rows) => {
+        if (cancelled) return
+        setMessages(
+          rows.map((row) => ({
+            role: row.role,
+            content: row.content,
+            timestamp: row.created_at ? new Date(row.created_at) : new Date(),
+          })),
+        )
+      })
+      .catch(() => {
+        // History is non-essential; ignore load failures.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [setMessages])
 
   const lastAssistant = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {

@@ -49,6 +49,12 @@ export interface TokensToday {
   output: number
 }
 
+export interface StoredMessage {
+  role: 'user' | 'assistant'
+  content: string
+  created_at: string | null
+}
+
 export const api = {
   baseUrl: API_URL,
   getAccounts: () => request<GmailAccount[]>('/gmail/accounts'),
@@ -59,5 +65,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ message, account_id: accountId ?? null }),
     }),
+  getMessages: (limit = 50) =>
+    request<StoredMessage[]>(`/chat/messages?limit=${limit}`),
   getTokensToday: () => request<TokensToday>('/chat/tokens/today'),
 }

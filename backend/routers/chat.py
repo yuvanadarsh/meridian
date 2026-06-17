@@ -3,13 +3,19 @@
 import logging
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import get_settings
 from db.database import get_db
-from models.chat import ChatRequest, ChatResponse, TokensToday, TokenUsage
+from models.chat import (
+    ChatMessageOut,
+    ChatRequest,
+    ChatResponse,
+    TokensToday,
+    TokenUsage,
+)
 from services import calendar_service, claude_service
 
 logger = logging.getLogger(__name__)
@@ -116,6 +122,28 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
         response=reply,
         tokens=TokenUsage(input=input_tokens, output=output_tokens, total=total),
     )
+
+
+@router.get("/messages", response_model=list[ChatMessageOut])
+async def get_messages(
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the most recent messages, oldest first, to pre-load on page load."""
+    result = await db.execute(
+        text(
+            "SELECT role, content, created_at "
+            "FROM chat_messages ORDER BY id DESC LIMIT :limit"
+        ),
+        {"limit": limit},
+    )
+    rows = list(reversed(result.mappings().all()))
+    return [
+        ChatMessageOut(
+            role=row["role"], content=row["content"], created_at=row["created_at"]
+        )
+        for row in rows
+    ]
 
 
 @router.get("/tokens/today", response_model=TokensToday)
