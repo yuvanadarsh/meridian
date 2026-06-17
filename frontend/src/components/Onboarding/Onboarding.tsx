@@ -1,9 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
-import { FiArrowRight, FiCheck } from 'react-icons/fi'
+import { FiArrowRight, FiCheck, FiLoader } from 'react-icons/fi'
 
 import { api } from '../../api/client'
-import type { GmailAccount, SweepMode, SweepProgress } from '../../api/client'
+import type {
+  GmailAccount,
+  SweepMode,
+  SweepProgress,
+  TriageCounts,
+} from '../../api/client'
 
 type Step = 'options' | 'progress' | 'done'
 
@@ -25,6 +30,7 @@ export function Onboarding({ accountId, onClose }: OnboardingProps) {
   const [count, setCount] = useState(500)
   const [sinceDate, setSinceDate] = useState('')
   const [progress, setProgress] = useState<SweepProgress | null>(null)
+  const [counts, setCounts] = useState<TriageCounts | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   // Load the account label/email and a rough mailbox-size estimate.
@@ -57,7 +63,13 @@ export function Onboarding({ accountId, onClose }: OnboardingProps) {
         if (cancelled) return
         setProgress(next)
         if (next.status === 'completed' || next.status === 'triage_complete') {
-          setStep('done')
+          try {
+            const results = await api.getTriageResults(accountId)
+            if (!cancelled) setCounts(results.counts)
+          } catch {
+            // Counts are best-effort; the done screen falls back to the tally.
+          }
+          if (!cancelled) setStep('done')
         } else if (next.status === 'error') {
           setError(next.error || 'The sweep failed.')
         }
@@ -210,6 +222,12 @@ export function Onboarding({ accountId, onClose }: OnboardingProps) {
               </div>
             </div>
 
+            <div className="flex flex-col gap-2.5">
+              <PhaseRow done label="Fetching email metadata" />
+              <PhaseRow done label="Parsing message bodies" />
+              <PhaseRow done={false} label="Classifying with AI…" />
+            </div>
+
             {error && <p className="text-sm text-rose-300/80">{error}</p>}
 
             <button
@@ -227,13 +245,24 @@ export function Onboarding({ accountId, onClose }: OnboardingProps) {
             <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-400/15 text-emerald-300">
               <FiCheck size={24} />
             </div>
-            <div className="text-xl font-semibold">Sweep complete</div>
+            <div className="text-xl font-semibold">
+              {counts ? 'Inbox analyzed' : 'Sweep complete'}
+            </div>
             <p className="text-sm text-white/60">
               Swept {progress?.stored.toLocaleString() ?? 0} new emails from {email}
               {progress && progress.skipped > 0
                 ? ` (${progress.skipped.toLocaleString()} already synced).`
                 : '.'}
             </p>
+
+            {counts && (
+              <div className="flex gap-3">
+                <CountPill label="Trash" value={counts.trash} tone="rose" />
+                <CountPill label="Archive" value={counts.archive} tone="sky" />
+                <CountPill label="Keep" value={counts.keep} tone="emerald" />
+              </div>
+            )}
+
             <button
               type="button"
               onClick={onClose}
@@ -281,6 +310,46 @@ function OptionRow({ selected, onSelect, label, hint, control, suffix }: OptionR
         {hint && <span className="text-white/40">({hint})</span>}
       </span>
     </button>
+  )
+}
+
+/** A pipeline step: a check when finished, a spinner while in progress. */
+function PhaseRow({ done, label }: { done: boolean; label: string }) {
+  return (
+    <div className="flex items-center gap-2.5 text-sm">
+      {done ? (
+        <FiCheck className="text-emerald-300" size={16} />
+      ) : (
+        <FiLoader className="animate-spin text-white/50" size={16} />
+      )}
+      <span className={done ? 'text-white/70' : 'text-white'}>{label}</span>
+    </div>
+  )
+}
+
+const COUNT_TONES = {
+  rose: 'text-rose-300',
+  sky: 'text-sky-300',
+  emerald: 'text-emerald-300',
+} as const
+
+/** A single triage-category tally shown after classification. */
+function CountPill({
+  label,
+  value,
+  tone,
+}: {
+  label: string
+  value: number
+  tone: keyof typeof COUNT_TONES
+}) {
+  return (
+    <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3">
+      <div className={`text-lg font-semibold ${COUNT_TONES[tone]}`}>
+        {value.toLocaleString()}
+      </div>
+      <div className="text-xs text-white/40">{label}</div>
+    </div>
   )
 }
 

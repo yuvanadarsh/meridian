@@ -72,6 +72,13 @@ export interface SweepProgress {
   error?: string | null
 }
 
+export interface TriageCounts {
+  trash: number
+  archive: number
+  keep: number
+  pending: number
+}
+
 export const api = {
   baseUrl: API_URL,
   getAccounts: () => request<GmailAccount[]>('/gmail/accounts'),
@@ -96,4 +103,6 @@ export const api = {
     }),
   getSweepProgress: (accountId: number) =>
     request<SweepProgress>(`/gmail/sweep/progress/${accountId}`),
+  getTriageResults: (accountId: number) =>
+    request<{ counts: TriageCounts }>(`/gmail/triage/results/${accountId}`),
 }

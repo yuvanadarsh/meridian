@@ -6,6 +6,7 @@ single point where Gmail is mutated is ``apply_triage`` (the approve route).
 """
 
 import asyncio
+import json
 import logging
 
 from sqlalchemy import text
@@ -61,6 +62,82 @@ async def classify_email(email: dict) -> str:
         if status in raw:
             return status
     return "keep"  # safe default — never destructive on ambiguity
+
+
+def _extract_json_array(raw: str) -> str:
+    """Slice out the first JSON array from a model reply (tolerates fences/prose)."""
+    start = raw.find("[")
+    end = raw.rfind("]")
+    if start == -1 or end == -1 or end < start:
+        return "[]"
+    return raw[start : end + 1]
+
+
+async def classify_and_summarize_batch(emails: list[dict]) -> list[dict]:
+    """Classify AND summarize a batch of emails in a single Claude call.
+
+    One call per batch (rather than per email) keeps the sweep fast. Returns a
+    list aligned with ``emails``, each ``{"status", "summary"}``. Any failure or
+    malformed reply degrades to ``keep`` with an empty summary — triage is never
+    destructive on ambiguity, and the user approves everything before it applies.
+    """
+    if not emails:
+        return []
+
+    lines = []
+    for index, email in enumerate(emails, 1):
+        sender = (email.get("from_address") or "")[:120]
+        subject = (email.get("subject") or "").replace("\n", " ")[:200]
+        snippet = (email.get("snippet") or "").replace("\n", " ")[:200]
+        lines.append(f"{index}. From: {sender} | Subject: {subject} | Snippet: {snippet}")
+
+    prompt = (
+        "Classify each email and write a one-sentence summary of it.\n"
+        f"Return ONLY a JSON array of exactly {len(emails)} objects, in the same "
+        "order as the emails, with no other text:\n"
+        '[{"status": "trash|archive|keep", "summary": "one sentence"}, ...]\n\n'
+        "Categories:\n"
+        "- trash: OTPs, promotional/marketing (List-Unsubscribe header or "
+        "CATEGORY_PROMOTIONS label), automated notifications with no action needed, "
+        "bounce messages, unsubscribe confirmations\n"
+        "- archive: past human-to-human conversations, receipts, shipping notices, "
+        "GitHub/GitLab notifications, newsletters, threads already replied to\n"
+        "- keep: needs a response or action, contracts/agreements/legal documents, "
+        "calendar invitations, direct personal correspondence\n\n"
+        "Emails:\n" + "\n".join(lines)
+    )
+
+    fallback = [{"status": "keep", "summary": ""} for _ in emails]
+    try:
+        client = claude_service.get_client()
+        message = await client.messages.create(
+            model=claude_service.MODEL,
+            max_tokens=3000,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        data = json.loads(_extract_json_array(claude_service.extract_text(message)))
+    except Exception as exc:  # noqa: BLE001 — keep the sweep going past a bad batch
+        logger.error("Batch triage failed for %s emails: %s", len(emails), exc)
+        return fallback
+
+    if not isinstance(data, list) or len(data) != len(emails):
+        logger.warning(
+            "Batch triage returned %s items, expected %s — defaulting to keep",
+            len(data) if isinstance(data, list) else "non-list",
+            len(emails),
+        )
+        return fallback
+
+    results = []
+    for item in data:
+        if not isinstance(item, dict):
+            results.append({"status": "keep", "summary": ""})
+            continue
+        status = str(item.get("status", "keep")).lower().strip()
+        if status not in VALID_STATUSES:
+            status = "keep"
+        results.append({"status": status, "summary": str(item.get("summary") or "").strip()})
+    return results
 
 
 async def triage_account(account_id: int, db: AsyncSession) -> dict:

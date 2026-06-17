@@ -448,13 +448,19 @@ async def sweep_account(
     count: int | None = None,
     since_date: str | None = None,
 ) -> dict:
-    """Fetch and store an account's messages with rate limiting and backoff.
+    """Fetch, store, and triage an account's messages in a single pass.
 
     Idempotent: re-running skips already-stored emails (ON CONFLICT DO NOTHING),
-    so an interrupted sweep resumes simply by being started again. Triage and
-    summarization run as a second pass (see triage_service); this pass only
-    fetches and parses.
+    so an interrupted sweep resumes simply by being started again. Each batch of
+    fetched emails is classified + summarized by Claude in one call before moving
+    on, so the user reaches triage review without two long waits. Triage results
+    are written to the database only — Gmail is never mutated here.
     """
+    # Local import avoids a circular dependency (triage_service imports this one).
+    from services import triage_service
+
+    triage_enabled = bool(settings.anthropic_api_key)
+
     creds = await load_credentials(db, account_id)
     service = await asyncio.to_thread(
         lambda: build("gmail", "v1", credentials=creds, cache_discovery=False)
@@ -473,6 +479,7 @@ async def sweep_account(
 
     for start in range(0, total, SWEEP_BATCH_SIZE):
         batch = message_ids[start : start + SWEEP_BATCH_SIZE]
+        to_classify: list[dict] = []
         for gmail_id in batch:
             try:
                 message = await fetch_with_backoff(service, gmail_id)
@@ -482,18 +489,35 @@ async def sweep_account(
 
             fetched += 1
             last_id = gmail_id
-            if (await _store_email(db, account_id, message))["id"] is not None:
+            stored_email = await _store_email(db, account_id, message)
+            if stored_email["id"] is not None:
                 stored += 1
+                # Unreadable emails are stored but skip triage + vectorization.
+                if stored_email["readable"]:
+                    to_classify.append(stored_email)
             else:
                 skipped += 1
 
             await asyncio.sleep(SWEEP_DELAY_SECONDS)
 
+        # Classify + summarize this batch in one Claude call, then persist.
+        if triage_enabled and to_classify:
+            results = await triage_service.classify_and_summarize_batch(to_classify)
+            for email, result in zip(to_classify, results):
+                await db.execute(
+                    text(
+                        "UPDATE emails SET triage_status = :status, summary = :summary "
+                        "WHERE id = :id"
+                    ),
+                    {"status": result["status"], "summary": result["summary"], "id": email["id"]},
+                )
+            await db.commit()
+
         # Persist progress at each batch boundary so the UI can follow along.
         await _save_progress(
             db,
             account_id,
-            status="running",
+            status="classifying" if triage_enabled else "running",
             total_estimated=total,
             fetched=fetched,
             stored=stored,
@@ -504,7 +528,7 @@ async def sweep_account(
     await _save_progress(
         db,
         account_id,
-        status="completed",
+        status="triage_complete" if triage_enabled else "completed",
         total_estimated=total,
         fetched=fetched,
         stored=stored,
