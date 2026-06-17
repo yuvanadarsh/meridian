@@ -22,9 +22,8 @@ interface OrbVisual {
 /** Radial core gradient — a lit sphere reading top-left. */
 const CORE_GRADIENT = 'radial-gradient(circle at 35% 35%, #1e4a7a, #0d1b2a 70%)'
 
-// Per-state visual config. `thinking` and `speaking` are filled in by the next
-// build step; until then they fall back to `idle` via the lookup below.
-const ORB_VISUALS: Partial<Record<OrbState, OrbVisual>> = {
+// Per-state visual config — every property the orb animates, keyed by state.
+const ORB_VISUALS: Record<OrbState, OrbVisual> = {
   idle: {
     size: 300,
     borderRadius: [
@@ -49,9 +48,42 @@ const ORB_VISUALS: Partial<Record<OrbState, OrbVisual>> = {
     scale: [0.95, 1.08, 0.95],
     scaleDuration: 1.5,
   },
+  thinking: {
+    size: 340,
+    // Rapidly cycles through highly asymmetric shapes — the morph *is* the
+    // animation here, so there is no scale breathing. ~0.4s per segment.
+    borderRadius: [
+      '70% 30% 60% 40% / 40% 60% 30% 70%',
+      '30% 70% 40% 60% / 70% 30% 60% 40%',
+      '60% 40% 30% 70% / 60% 30% 70% 40%',
+      '40% 60% 70% 30% / 30% 70% 40% 60%',
+      '50% 50% 35% 65% / 65% 35% 55% 45%',
+      '70% 30% 60% 40% / 40% 60% 30% 70%',
+    ],
+    morphDuration: 2,
+    // Listening-level brightness, shifted toward cyan to read as "processing".
+    boxShadow:
+      '0 0 80px 30px rgba(14, 165, 233, 0.45), 0 0 160px 60px rgba(124, 58, 237, 0.25), 0 0 220px 90px rgba(192, 38, 211, 0.12)',
+    scale: [1, 1],
+    scaleDuration: 2,
+  },
+  speaking: {
+    size: 360,
+    // Slow organic morph underneath the fast, irregular scale pulse.
+    borderRadius: [
+      '60% 40% 55% 45% / 50% 60% 40% 50%',
+      '50% 50% 45% 55% / 55% 45% 55% 45%',
+    ],
+    morphDuration: 2,
+    // Brightest glow of any state.
+    boxShadow:
+      '0 0 90px 35px rgba(192, 38, 211, 0.6), 0 0 180px 70px rgba(124, 58, 237, 0.3), 0 0 260px 110px rgba(14, 165, 233, 0.15)',
+    // Irregular rhythm simulating audio waveform energy; returns to 1 so the
+    // loop is seamless.
+    scale: [1, 1.06, 0.98, 1.04, 1, 0.97, 1.05, 1],
+    scaleDuration: 0.8,
+  },
 }
-
-const FALLBACK_VISUAL = ORB_VISUALS.idle as OrbVisual
 
 interface OrbProps {
   state: OrbState
@@ -63,7 +95,7 @@ interface OrbProps {
  */
 export function Orb({ state }: OrbProps) {
   const reduceMotion = useReducedMotion()
-  const visual = ORB_VISUALS[state] ?? FALLBACK_VISUAL
+  const visual = ORB_VISUALS[state]
   const showMic = state === 'listening'
 
   return (
