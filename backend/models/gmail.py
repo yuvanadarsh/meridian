@@ -36,3 +36,9 @@ class TriageApproval(BaseModel):
     """
 
     overrides: list[TriageOverride] = []
+
+
+class AccountUpdate(BaseModel):
+    """Editable fields on a connected account."""
+
+    label: str

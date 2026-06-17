@@ -99,6 +99,13 @@ export const api = {
   getAccounts: () => request<GmailAccount[]>('/gmail/accounts'),
   getAuthUrl: (label: string) =>
     request<{ url: string }>(`/gmail/auth?label=${encodeURIComponent(label)}`),
+  updateAccount: (accountId: number, label: string) =>
+    request<GmailAccount>(`/gmail/accounts/${accountId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ label }),
+    }),
+  deleteAccount: (accountId: number) =>
+    request<{ deleted: boolean }>(`/gmail/accounts/${accountId}`, { method: 'DELETE' }),
   sendMessage: (message: string, accountId?: number) =>
     request<ChatResponse>('/chat/message', {
       method: 'POST',

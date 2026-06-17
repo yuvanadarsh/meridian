@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import get_settings
 from db.database import get_db
-from models.gmail import SweepOptions, TriageApproval
+from models.gmail import AccountUpdate, SweepOptions, TriageApproval
 from services import gmail_service, triage_service, vector_service
 
 logger = logging.getLogger(__name__)
@@ -67,6 +67,28 @@ async def gmail_callback(
 async def gmail_accounts(db: AsyncSession = Depends(get_db)):
     """List connected Gmail accounts."""
     return await gmail_service.list_accounts(db)
+
+
+@router.patch("/accounts/{account_id}")
+async def update_account(
+    account_id: int,
+    payload: AccountUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Rename an account's label."""
+    updated = await gmail_service.update_account_label(db, account_id, payload.label)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return updated
+
+
+@router.delete("/accounts/{account_id}")
+async def delete_account(account_id: int, db: AsyncSession = Depends(get_db)):
+    """Remove an account and all of its emails and calendar events."""
+    deleted = await gmail_service.delete_account(db, account_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return {"deleted": True}
 
 
 @router.get("/estimate/{account_id}")

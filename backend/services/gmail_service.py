@@ -124,6 +124,43 @@ async def list_accounts(db: AsyncSession) -> list[dict]:
     return [dict(row) for row in result.mappings().all()]
 
 
+async def update_account_label(
+    db: AsyncSession, account_id: int, label: str
+) -> dict | None:
+    """Rename an account's label. Returns the updated row, or None if missing."""
+    result = await db.execute(
+        text(
+            "UPDATE gmail_accounts SET label = :label WHERE id = :id "
+            "RETURNING id, email, label, last_synced_at"
+        ),
+        {"label": label, "id": account_id},
+    )
+    row = result.mappings().first()
+    await db.commit()
+    return dict(row) if row else None
+
+
+async def delete_account(db: AsyncSession, account_id: int) -> bool:
+    """Delete an account and everything that references it.
+
+    The foreign keys have no ON DELETE rule, so dependents are removed in
+    reference order first: calendar_events (point at emails + account), then
+    emails, then sweep_progress, then the account itself.
+    """
+    await db.execute(
+        text("DELETE FROM calendar_events WHERE account_id = :id"), {"id": account_id}
+    )
+    await db.execute(text("DELETE FROM emails WHERE account_id = :id"), {"id": account_id})
+    await db.execute(
+        text("DELETE FROM sweep_progress WHERE account_id = :id"), {"id": account_id}
+    )
+    result = await db.execute(
+        text("DELETE FROM gmail_accounts WHERE id = :id"), {"id": account_id}
+    )
+    await db.commit()
+    return (result.rowcount or 0) > 0
+
+
 async def load_credentials(db: AsyncSession, account_id: int) -> Credentials:
     """Load stored credentials for an account, refreshing them if expired.
 
