@@ -19,6 +19,30 @@ calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
 - Live token usage counter (polls the database)
 - All data stored locally — nothing leaves your machine except API calls
 
+## Features (Phase 2)
+
+- **Dot-sphere orb** — a canvas-rendered rotating sphere of dots replaces the
+  CSS blob, with distinct idle / listening / thinking / speaking motion
+- **Chat modal** — full-screen blurred overlay with markdown-rendered replies, a
+  textarea that grows with its content, and conversation history pre-loaded from
+  the database on page load (the last reply shows as a subtitle under the orb)
+- **Onboarding flow** — connect an account, then: choose how much to sweep
+  (all / last N / since a date) → watch live progress → review the AI triage →
+  approve → build memory (vectorize)
+  - Sweep, triage classification, and a one-sentence summary per email happen in
+    a single pass (25 emails per Claude call)
+  - Per-category review with individual checkboxes and recategorization; only
+    your changes are sent on approval
+  - Keep + Archive emails are embedded with VoyageAI right after approval
+- **Unlimited accounts** — add and remove any number of Google accounts; no fixed
+  role slots
+- **Obsidian memory layer** — conversations are written to daily notes with
+  auto-extracted `[[wikilinks]]`, the vault is ingested into PostgreSQL, and
+  relevant notes are retrieved (RAG) into the chat context
+- Fixes: the assistant knows the calendar is read-only (no hallucinated
+  scheduling), the `?connected=` OAuth param is stripped after sign-in, and chat
+  history survives a refresh
+
 ## Prerequisites
 
 - macOS or Linux
@@ -45,15 +69,29 @@ calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
    psql -U your_user -d meridian -f backend/db/init.sql
    ```
 
-3. Start Meridian (FastAPI + Vite, connecting to your host PostgreSQL):
+   On an existing database created before Phase 2, apply the migrations instead
+   of (or in addition to) re-running `init.sql`:
+
+   ```bash
+   psql -U your_user -d meridian -f backend/db/migrations/002_obsidian_notes.sql
+   psql -U your_user -d meridian -f backend/db/migrations/003_email_summary.sql
+   ```
+
+3. (Optional) Point Meridian at your Obsidian vault for the memory layer by
+   setting `OBSIDIAN_VAULT_PATH` in `.env` to the vault's absolute path. When
+   unset, the daily-note writer and RAG retrieval simply no-op.
+
+4. Start Meridian (FastAPI + Vite, connecting to your host PostgreSQL):
 
    ```bash
    docker compose up --build
    ```
 
-4. Open http://localhost:5173
+5. Open http://localhost:5173 (use **Chrome** — push-to-talk voice relies on the
+   Web Speech API, which other browsers don't fully support)
 
-5. Connect your Gmail account via the Connections panel (hamburger menu), or from the CLI:
+6. Connect your Gmail account via the Connections panel (hamburger menu), which
+   drops you straight into the onboarding flow. You can also connect from the CLI:
 
    ```bash
    python scripts/setup_oauth.py --label personal
@@ -90,6 +128,9 @@ OAuth tokens are stored in the database after first authentication, never in `.e
 - **Backend:** FastAPI (Python), async SQLAlchemy
 - **Database:** PostgreSQL + pgvector (runs on the host, not containerized)
 - **AI:** Claude (`claude-sonnet-4-6`) for reasoning, VoyageAI for embeddings, ElevenLabs for TTS
+- **Memory:** an Obsidian vault (set via `OBSIDIAN_VAULT_PATH`) — daily notes are
+  written after each exchange, ingested back into pgvector, and retrieved into
+  chat context. A background watcher in the FastAPI lifespan polls the vault.
 
 Only the `api` and `frontend` services run in Docker; the API container reaches
 your host PostgreSQL via `host.docker.internal`.
