@@ -5,16 +5,25 @@ All secrets and machine-specific values are read from environment variables
 """
 
 from functools import lru_cache
+from pathlib import Path
 from urllib.parse import quote_plus
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_BACKEND_DIR = Path(__file__).resolve().parent
+_ROOT_DIR = _BACKEND_DIR.parent
+
+# Look for .env in both backend/ and the repo root so the same code works
+# whether run from backend/, the repo root, or Docker (where the file is
+# absent and real environment variables are used instead). Repo root wins.
+_ENV_FILES = (str(_BACKEND_DIR / ".env"), str(_ROOT_DIR / ".env"))
 
 
 class Settings(BaseSettings):
     """Strongly-typed settings sourced from the environment / .env file."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=_ENV_FILES,
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
