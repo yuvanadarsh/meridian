@@ -2,6 +2,7 @@ import ChatHistory from './components/Chat/ChatHistory'
 import ChatInput from './components/Chat/ChatInput'
 import HamburgerMenu from './components/Menu/HamburgerMenu'
 import Orb from './components/Orb/Orb'
+import { useChat } from './hooks/useChat'
 import { useMeridianStore } from './store/meridianStore'
 
 /**
@@ -13,12 +14,7 @@ function App() {
   const orbState = useMeridianStore((state) => state.orbState)
   const messages = useMeridianStore((state) => state.messages)
   const tokensToday = useMeridianStore((state) => state.tokensToday)
-  const addMessage = useMeridianStore((state) => state.addMessage)
-
-  // Wired to the Claude API in a later step; for now it echoes the user's turn.
-  const handleSubmit = (text: string) => {
-    addMessage({ role: 'user', content: text, timestamp: new Date() })
-  }
+  const { send, sending } = useChat()
 
   return (
     <main className="relative min-h-screen w-full overflow-hidden bg-[#0a0a0a] bg-[radial-gradient(ellipse_at_center,_#111827_0%,_#0a0a0a_70%)] text-white">
@@ -34,7 +30,7 @@ function App() {
       <div className="flex min-h-screen flex-col items-center justify-center gap-8 px-4 py-16">
         <Orb state={orbState} />
         <ChatHistory messages={messages} />
-        <ChatInput onSubmit={handleSubmit} />
+        <ChatInput onSubmit={send} disabled={sending} />
       </div>
 
       <HamburgerMenu />

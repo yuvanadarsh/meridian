@@ -7,7 +7,7 @@ reasoning, drafting, and triage classification.
 import logging
 
 from anthropic import AsyncAnthropic
-from anthropic.types import Message
+from anthropic.types import Message, Usage
 
 from config import get_settings
 
@@ -33,3 +33,17 @@ def extract_text(message: Message) -> str:
     return "".join(
         block.text for block in message.content if block.type == "text"
     ).strip()
+
+
+async def chat(
+    *, system: str, messages: list[dict], max_tokens: int = 2048
+) -> tuple[str, Usage]:
+    """Send a conversation to Claude; return the reply text and token usage."""
+    client = get_client()
+    response = await client.messages.create(
+        model=MODEL,
+        max_tokens=max_tokens,
+        system=system,
+        messages=messages,
+    )
+    return extract_text(response), response.usage
