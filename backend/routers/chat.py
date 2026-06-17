@@ -65,7 +65,10 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not configured")
 
     calendar_context = await _calendar_context(payload.account_id, db)
-    system = claude_service.build_system_prompt(calendar_context=calendar_context)
+    obsidian_context = await obsidian_service.get_obsidian_context(payload.message, db)
+    system = claude_service.build_system_prompt(
+        calendar_context=calendar_context, obsidian_context=obsidian_context
+    )
 
     messages = await _recent_history(db)
     messages.append({"role": "user", "content": payload.message})

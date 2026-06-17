@@ -288,3 +288,48 @@ async def vectorize_notes_loop(poll_seconds: int = VECTORIZE_INTERVAL_SECONDS) -
         except Exception:  # noqa: BLE001
             logger.exception("Obsidian note vectorization iteration failed")
         await asyncio.sleep(poll_seconds)
+
+
+# ---------------------------------------------------------------------------
+# RAG retrieval — surface relevant vault notes for a chat query
+# ---------------------------------------------------------------------------
+
+
+async def get_obsidian_context(query: str, db: AsyncSession, limit: int = 3) -> str:
+    """Return the most relevant vault notes for ``query`` as system-prompt context.
+
+    Embeds the query and runs a pgvector cosine-similarity search over the
+    ingested notes. Returns an empty string when there's no key, no embedded
+    notes, or on any failure — chat should never break over missing context.
+    """
+    if not settings.voyage_api_key:
+        return ""
+    from services import vector_service
+
+    try:
+        query_embedding = (await vector_service.embed_texts([query]))[0]
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to embed chat query for Obsidian retrieval")
+        return ""
+
+    result = await db.execute(
+        text(
+            """
+            SELECT title, content,
+                   1 - (embedding <=> CAST(:embedding AS vector)) AS similarity
+            FROM obsidian_notes
+            WHERE embedding IS NOT NULL
+            ORDER BY embedding <=> CAST(:embedding AS vector)
+            LIMIT :limit
+            """
+        ),
+        {"embedding": vector_service.to_pgvector(query_embedding), "limit": limit},
+    )
+    notes = result.mappings().all()
+    if not notes:
+        return ""
+
+    context = "Relevant notes from your Obsidian vault:\n\n"
+    for note in notes:
+        context += f"### {note['title']}\n{(note['content'] or '')[:500]}\n\n"
+    return context.rstrip()
