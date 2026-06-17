@@ -4,6 +4,7 @@ import ChatHistory from './components/Chat/ChatHistory'
 import ChatInput from './components/Chat/ChatInput'
 import HamburgerMenu from './components/Menu/HamburgerMenu'
 import Orb from './components/Orb/Orb'
+import TokenCounter from './components/TokenUsage/TokenCounter'
 import { useChat } from './hooks/useChat'
 import { useVoice } from './hooks/useVoice'
 import { useMeridianStore } from './store/meridianStore'
@@ -16,7 +17,6 @@ import { useMeridianStore } from './store/meridianStore'
 function App() {
   const orbState = useMeridianStore((state) => state.orbState)
   const messages = useMeridianStore((state) => state.messages)
-  const tokensToday = useMeridianStore((state) => state.tokensToday)
   const { send, sending } = useChat()
   const { recording, supported, toggleRecording } = useVoice()
 
@@ -26,10 +26,7 @@ function App() {
         Meridian
       </span>
 
-      {/* Live polling counter replaces this span in a later step. */}
-      <span className="absolute right-4 top-4 z-10 font-mono text-xs text-white/40">
-        Tokens today: {tokensToday.toLocaleString()}
-      </span>
+      <TokenCounter />
 
       <div className="flex min-h-screen flex-col items-center justify-center gap-8 px-4 py-16">
         <Orb state={orbState} />
