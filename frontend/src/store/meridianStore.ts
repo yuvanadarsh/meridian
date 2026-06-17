@@ -27,6 +27,8 @@ interface MeridianStore {
   activePanel: ActivePanel
   /** Email just connected via OAuth — hands off into the onboarding flow. */
   justConnectedEmail: string | null
+  /** Account currently being onboarded (sweep → triage → vectorize), if any. */
+  onboardingAccountId: number | null
 
   setOrbState: (state: OrbState) => void
   addMessage: (msg: ChatMessage) => void
@@ -37,6 +39,7 @@ interface MeridianStore {
   setMenuOpen: (open: boolean) => void
   setActivePanel: (panel: ActivePanel) => void
   setJustConnectedEmail: (email: string | null) => void
+  setOnboardingAccountId: (id: number | null) => void
 }
 
 export const useMeridianStore = create<MeridianStore>((set) => ({
@@ -47,6 +50,7 @@ export const useMeridianStore = create<MeridianStore>((set) => ({
   menuOpen: false,
   activePanel: null,
   justConnectedEmail: null,
+  onboardingAccountId: null,
 
   setOrbState: (orbState) => set({ orbState }),
   addMessage: (msg) => set((state) => ({ messages: [...state.messages, msg] })),
@@ -56,4 +60,5 @@ export const useMeridianStore = create<MeridianStore>((set) => ({
   setMenuOpen: (menuOpen) => set({ menuOpen }),
   setActivePanel: (activePanel) => set({ activePanel }),
   setJustConnectedEmail: (justConnectedEmail) => set({ justConnectedEmail }),
+  setOnboardingAccountId: (onboardingAccountId) => set({ onboardingAccountId }),
 }))

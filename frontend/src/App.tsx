@@ -5,6 +5,7 @@ import { api } from './api/client'
 import ChatInput from './components/Chat/ChatInput'
 import ChatModal from './components/Chat/ChatModal'
 import HamburgerMenu from './components/Menu/HamburgerMenu'
+import Onboarding from './components/Onboarding/Onboarding'
 import Orb from './components/Orb/Orb'
 import TokenCounter from './components/TokenUsage/TokenCounter'
 import { useChat } from './hooks/useChat'
@@ -28,7 +29,10 @@ function App() {
   const chatOpen = useMeridianStore((state) => state.chatOpen)
   const setChatOpen = useMeridianStore((state) => state.setChatOpen)
   const setMessages = useMeridianStore((state) => state.setMessages)
+  const justConnectedEmail = useMeridianStore((state) => state.justConnectedEmail)
   const setJustConnectedEmail = useMeridianStore((state) => state.setJustConnectedEmail)
+  const onboardingAccountId = useMeridianStore((state) => state.onboardingAccountId)
+  const setOnboardingAccountId = useMeridianStore((state) => state.setOnboardingAccountId)
   const { send, sending } = useChat()
   const { recording, supported, toggleRecording } = useVoice()
 
@@ -43,6 +47,25 @@ function App() {
       window.history.replaceState({}, '', window.location.pathname)
     }
   }, [setJustConnectedEmail])
+
+  // Resolve the just-connected email to its account id, then drop into the
+  // onboarding flow (sweep → triage → vectorize) for that account.
+  useEffect(() => {
+    if (!justConnectedEmail) return
+    let cancelled = false
+    api
+      .getAccounts()
+      .then((accounts) => {
+        if (cancelled) return
+        const match = accounts.find((account) => account.email === justConnectedEmail)
+        if (match) setOnboardingAccountId(match.id)
+        setJustConnectedEmail(null)
+      })
+      .catch(() => setJustConnectedEmail(null))
+    return () => {
+      cancelled = true
+    }
+  }, [justConnectedEmail, setOnboardingAccountId, setJustConnectedEmail])
 
   // Pre-load the recent conversation from the database so a refresh keeps the
   // thread intact. Best-effort: if the API is down the screen stays usable.
@@ -125,6 +148,13 @@ function App() {
       />
 
       <HamburgerMenu />
+
+      {onboardingAccountId !== null && (
+        <Onboarding
+          accountId={onboardingAccountId}
+          onClose={() => setOnboardingAccountId(null)}
+        />
+      )}
     </main>
   )
 }

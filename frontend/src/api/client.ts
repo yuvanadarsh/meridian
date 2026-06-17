@@ -55,6 +55,23 @@ export interface StoredMessage {
   created_at: string | null
 }
 
+export type SweepMode = 'all' | 'count' | 'since'
+
+export interface SweepOptions {
+  mode: SweepMode
+  count?: number | null
+  since_date?: string | null
+}
+
+export interface SweepProgress {
+  status: string // idle | running | classifying | triage_complete | completed | error
+  fetched: number
+  total_estimated: number
+  stored: number
+  skipped: number
+  error?: string | null
+}
+
 export const api = {
   baseUrl: API_URL,
   getAccounts: () => request<GmailAccount[]>('/gmail/accounts'),
@@ -68,4 +85,15 @@ export const api = {
   getMessages: (limit = 50) =>
     request<StoredMessage[]>(`/chat/messages?limit=${limit}`),
   getTokensToday: () => request<TokensToday>('/chat/tokens/today'),
+
+  // Onboarding — sweep
+  getEstimate: (accountId: number) =>
+    request<{ estimated_count: number }>(`/gmail/estimate/${accountId}`),
+  startSweep: (accountId: number, options: SweepOptions) =>
+    request<{ status: string; account_id: number }>(`/gmail/sweep/${accountId}`, {
+      method: 'POST',
+      body: JSON.stringify(options),
+    }),
+  getSweepProgress: (accountId: number) =>
+    request<SweepProgress>(`/gmail/sweep/progress/${accountId}`),
 }

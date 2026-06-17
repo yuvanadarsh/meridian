@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import get_settings
 from db.database import get_db
+from models.gmail import SweepOptions
 from services import gmail_service, triage_service
 
 logger = logging.getLogger(__name__)
@@ -68,18 +69,38 @@ async def gmail_accounts(db: AsyncSession = Depends(get_db)):
     return await gmail_service.list_accounts(db)
 
 
+@router.get("/estimate/{account_id}")
+async def estimate(account_id: int, db: AsyncSession = Depends(get_db)):
+    """Approximate how many messages the mailbox holds (for the sweep options UI)."""
+    accounts = await gmail_service.list_accounts(db)
+    if not any(account["id"] == account_id for account in accounts):
+        raise HTTPException(status_code=404, detail="Account not found")
+    try:
+        count = await gmail_service.estimate_count(db, account_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Failed to estimate mailbox size for account %s", account_id)
+        raise HTTPException(status_code=502, detail=f"Estimate failed: {exc}") from exc
+    return {"estimated_count": count}
+
+
 @router.post("/sweep/{account_id}")
 async def start_sweep(
     account_id: int,
+    options: SweepOptions,
     background_tasks: BackgroundTasks,
-    max_messages: int = Query(500, ge=1, le=2000),
     db: AsyncSession = Depends(get_db),
 ):
     """Kick off an email sweep for an account as a background task."""
     accounts = await gmail_service.list_accounts(db)
     if not any(account["id"] == account_id for account in accounts):
         raise HTTPException(status_code=404, detail="Account not found")
-    background_tasks.add_task(gmail_service.run_sweep_background, account_id, max_messages)
+    background_tasks.add_task(
+        gmail_service.run_sweep_background,
+        account_id,
+        mode=options.mode,
+        count=options.count,
+        since_date=options.since_date,
+    )
     return {"status": "started", "account_id": account_id}
 
 
