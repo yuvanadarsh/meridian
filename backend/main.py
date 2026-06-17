@@ -15,7 +15,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from config import get_settings
 from db.database import check_connection
-from routers import calendar, chat, gmail, health, voice
+from routers import calendar, chat, gmail, health, obsidian, voice
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,6 +53,7 @@ app.include_router(gmail.router)
 app.include_router(calendar.router)
 app.include_router(chat.router)
 app.include_router(voice.router)
+app.include_router(obsidian.router)
 
 
 # All failures return the shape { error: string, detail?: string }.

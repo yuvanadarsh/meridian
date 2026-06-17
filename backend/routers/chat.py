@@ -1,5 +1,6 @@
 """Chat routes: Claude conversation with calendar context and token tracking."""
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -15,7 +16,7 @@ from models.chat import (
     TokensToday,
     TokenUsage,
 )
-from services import calendar_service, claude_service
+from services import calendar_service, claude_service, obsidian_service
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -110,6 +111,12 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
         {"input": input_tokens, "output": output_tokens, "total": total},
     )
     await db.commit()
+
+    # Mirror the exchange into the Obsidian daily note (best-effort, no vault → no-op).
+    try:
+        await asyncio.to_thread(obsidian_service.append_exchange, payload.message, reply)
+    except Exception:  # noqa: BLE001 — never fail a chat over a note write
+        logger.exception("Obsidian daily-note append failed")
 
     return ChatResponse(
         response=reply,
