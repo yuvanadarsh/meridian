@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import get_settings
 from db.database import get_db
-from services import gmail_service
+from services import gmail_service, triage_service
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -87,3 +87,38 @@ async def start_sweep(
 async def sweep_progress(account_id: int, db: AsyncSession = Depends(get_db)):
     """Return the current sweep progress for an account."""
     return await gmail_service.get_sweep_progress(db, account_id)
+
+
+@router.post("/triage/start/{account_id}")
+async def start_triage(
+    account_id: int,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    """Classify all pending emails for an account (background task)."""
+    if not settings.anthropic_api_key:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not configured")
+    accounts = await gmail_service.list_accounts(db)
+    if not any(account["id"] == account_id for account in accounts):
+        raise HTTPException(status_code=404, detail="Account not found")
+    background_tasks.add_task(triage_service.run_triage_background, account_id)
+    return {"status": "started", "account_id": account_id}
+
+
+@router.get("/triage/results/{account_id}")
+async def triage_results(account_id: int, db: AsyncSession = Depends(get_db)):
+    """Return triage counts and a sample of emails per category for review."""
+    return await triage_service.get_triage_results(account_id, db)
+
+
+@router.post("/triage/approve/{account_id}")
+async def approve_triage(account_id: int, db: AsyncSession = Depends(get_db)):
+    """Apply approved triage to Gmail. The ONLY endpoint that mutates Gmail."""
+    accounts = await gmail_service.list_accounts(db)
+    if not any(account["id"] == account_id for account in accounts):
+        raise HTTPException(status_code=404, detail="Account not found")
+    try:
+        return await triage_service.apply_triage(account_id, db)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Failed to apply triage for account %s", account_id)
+        raise HTTPException(status_code=500, detail=f"Failed to apply triage: {exc}") from exc
