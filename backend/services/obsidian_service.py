@@ -8,15 +8,25 @@ it is unset, every operation degrades to a no-op so chat still works.
 Vault ingestion and RAG retrieval build on this module in later steps.
 """
 
+import asyncio
 import logging
 import re
 from datetime import datetime
 from pathlib import Path
 
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from config import get_settings
+from db.database import AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+# How often the background tasks run.
+WATCH_INTERVAL_SECONDS = 30
+VECTORIZE_INTERVAL_SECONDS = 300
+NOTE_VECTORIZE_BATCH = 128
 
 # Section headings of a daily note, in order. Conversations grow at the top;
 # Related (wikilinks) sits at the bottom and is merged on each exchange.
@@ -40,6 +50,7 @@ _WIKILINK_STOPWORDS = {
 
 _CAPITALIZED_PHRASE = re.compile(r"\b([A-Z][a-zA-Z0-9]+(?:\s+[A-Z][a-zA-Z0-9]+)*)\b")
 _WIKILINK = re.compile(r"\[\[([^\]]+)\]\]")
+_HEADING = re.compile(r"^#\s+(.+)$", re.MULTILINE)
 
 
 def vault_path() -> Path | None:
@@ -150,3 +161,130 @@ def append_exchange(
     except OSError:
         logger.exception("Failed to write Obsidian daily note")
         return False
+
+
+# ---------------------------------------------------------------------------
+# Vault ingestion — pull .md files into PostgreSQL for RAG retrieval
+# ---------------------------------------------------------------------------
+
+
+async def ingest_note(md_file: Path, db: AsyncSession) -> None:
+    """Upsert one .md file into ``obsidian_notes``, flagged for (re)embedding."""
+    try:
+        content = md_file.read_text(encoding="utf-8", errors="ignore")
+        mtime = datetime.fromtimestamp(md_file.stat().st_mtime)
+    except OSError:
+        logger.exception("Could not read vault note %s", md_file)
+        return
+
+    heading = _HEADING.search(content)
+    title = heading.group(1).strip() if heading else md_file.stem
+    # Preserve order, drop duplicates.
+    wikilinks = list(dict.fromkeys(_WIKILINK.findall(content)))
+
+    await db.execute(
+        text(
+            """
+            INSERT INTO obsidian_notes
+                (file_path, title, content, wikilinks, last_modified, is_vectorized)
+            VALUES (:file_path, :title, :content, :wikilinks, :last_modified, FALSE)
+            ON CONFLICT (file_path) DO UPDATE SET
+                title = EXCLUDED.title,
+                content = EXCLUDED.content,
+                wikilinks = EXCLUDED.wikilinks,
+                last_modified = EXCLUDED.last_modified,
+                is_vectorized = FALSE
+            """
+        ),
+        {
+            "file_path": str(md_file),
+            "title": title,
+            "content": content,
+            "wikilinks": wikilinks,
+            "last_modified": mtime,
+        },
+    )
+    await db.commit()
+
+
+async def watch_vault(poll_seconds: int = WATCH_INTERVAL_SECONDS) -> None:
+    """Poll the vault for new/modified .md files and ingest them (runs forever)."""
+    vault = vault_path()
+    if vault is None:
+        logger.info("OBSIDIAN_VAULT_PATH not set — vault watcher disabled")
+        return
+
+    logger.info("Watching Obsidian vault at %s", vault)
+    seen: dict[str, float] = {}
+    while True:
+        try:
+            for md_file in vault.rglob("*.md"):
+                try:
+                    mtime = md_file.stat().st_mtime
+                except OSError:
+                    continue
+                key = str(md_file)
+                if seen.get(key) != mtime:
+                    seen[key] = mtime
+                    async with AsyncSessionLocal() as db:
+                        await ingest_note(md_file, db)
+        except Exception:  # noqa: BLE001 — keep the loop alive across failures
+            logger.exception("Vault watch iteration failed")
+        await asyncio.sleep(poll_seconds)
+
+
+async def vectorize_pending_notes(db: AsyncSession) -> int:
+    """Embed up to one batch of not-yet-vectorized notes via VoyageAI."""
+    if not settings.voyage_api_key:
+        return 0
+    # Imported here to keep this module importable without the embeddings stack.
+    from services import vector_service
+
+    result = await db.execute(
+        text(
+            "SELECT id, title, content FROM obsidian_notes "
+            "WHERE is_vectorized = FALSE ORDER BY id LIMIT :limit"
+        ),
+        {"limit": NOTE_VECTORIZE_BATCH},
+    )
+    notes = [dict(row) for row in result.mappings().all()]
+    if not notes:
+        return 0
+
+    texts = [f"{note['title'] or ''}\n\n{(note['content'] or '')[:4000]}" for note in notes]
+    try:
+        embeddings = await vector_service.embed_texts(texts)
+    except Exception:  # noqa: BLE001
+        logger.exception("VoyageAI embedding failed for Obsidian notes")
+        return 0
+
+    embedded = 0
+    for note, embedding in zip(notes, embeddings):
+        if len(embedding) != vector_service.EMBED_DIM:
+            logger.error("Note %s embedding dimension mismatch — skipped", note["id"])
+            continue
+        await db.execute(
+            text(
+                "UPDATE obsidian_notes SET embedding = CAST(:embedding AS vector), "
+                "is_vectorized = TRUE WHERE id = :id"
+            ),
+            {"embedding": vector_service.to_pgvector(embedding), "id": note["id"]},
+        )
+        embedded += 1
+    await db.commit()
+    return embedded
+
+
+async def vectorize_notes_loop(poll_seconds: int = VECTORIZE_INTERVAL_SECONDS) -> None:
+    """Periodically embed freshly ingested notes (runs forever)."""
+    if vault_path() is None:
+        return
+    while True:
+        try:
+            async with AsyncSessionLocal() as db:
+                embedded = await vectorize_pending_notes(db)
+            if embedded:
+                logger.info("Embedded %s Obsidian note(s)", embedded)
+        except Exception:  # noqa: BLE001
+            logger.exception("Obsidian note vectorization iteration failed")
+        await asyncio.sleep(poll_seconds)
