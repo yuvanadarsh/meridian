@@ -136,4 +136,12 @@ export const api = {
     if (!response.ok) throw new Error('Could not generate the report')
     return response.text()
   },
+
+  // Onboarding — vectorization
+  startVectorize: (accountId: number) =>
+    request<{ status: string; account_id: number }>(`/gmail/vectorize/${accountId}`, {
+      method: 'POST',
+    }),
+  getVectorizeProgress: (accountId: number) =>
+    request<{ vectorized: number; total: number }>(`/gmail/vectorize/progress/${accountId}`),
 }

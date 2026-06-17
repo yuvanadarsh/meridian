@@ -12,7 +12,7 @@ import type {
 } from '../../api/client'
 import TriageReview from './TriageReview'
 
-type Step = 'options' | 'progress' | 'review' | 'done'
+type Step = 'options' | 'progress' | 'review' | 'vectorize' | 'done'
 
 interface OnboardingProps {
   accountId: number
@@ -35,6 +35,7 @@ export function Onboarding({ accountId, onClose }: OnboardingProps) {
   const [counts, setCounts] = useState<TriageCounts | null>(null)
   const [applying, setApplying] = useState(false)
   const [applied, setApplied] = useState<{ trashed: number; archived: number } | null>(null)
+  const [vector, setVector] = useState<{ vectorized: number; total: number } | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   // Load the account label/email and a rough mailbox-size estimate.
@@ -107,13 +108,34 @@ export function Onboarding({ accountId, onClose }: OnboardingProps) {
     }
   }
 
+  // Poll vectorization progress every 2s while building memory.
+  useEffect(() => {
+    if (step !== 'vectorize') return
+    let cancelled = false
+    const tick = async () => {
+      try {
+        const next = await api.getVectorizeProgress(accountId)
+        if (!cancelled) setVector(next)
+      } catch {
+        // Transient — keep polling.
+      }
+    }
+    void tick()
+    const id = window.setInterval(() => void tick(), 2000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [step, accountId])
+
   const applyTriage = async (overrides: TriageOverride[]) => {
     setApplying(true)
     setError(null)
     try {
       const result = await api.approveTriage(accountId, overrides)
       setApplied(result)
-      setStep('done')
+      // approve also kicks off vectorization on the backend — watch it build.
+      setStep('vectorize')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not apply triage.')
     } finally {
@@ -282,6 +304,55 @@ export function Onboarding({ accountId, onClose }: OnboardingProps) {
             onApply={(overrides) => void applyTriage(overrides)}
             onDiscard={() => void discard()}
           />
+        )}
+
+        {step === 'vectorize' && (
+          <div className="flex flex-col gap-6">
+            <div>
+              <div className="text-xl font-semibold">Building memory</div>
+              {applied && (
+                <div className="mt-1 text-sm text-white/50">
+                  Trashed {applied.trashed.toLocaleString()}, archived{' '}
+                  {applied.archived.toLocaleString()} in Gmail.
+                </div>
+              )}
+            </div>
+
+            {(() => {
+              const total = vector?.total ?? 0
+              const done = vector ? vector.vectorized : 0
+              const complete = vector !== null && (total === 0 || done >= total)
+              const pct = complete ? 100 : total > 0 ? Math.round((done / total) * 100) : 0
+              return (
+                <>
+                  <div>
+                    <div className="h-2 w-full overflow-hidden rounded-full bg-white/10">
+                      <motion.div
+                        className="h-full rounded-full bg-emerald-400/70"
+                        animate={{ width: `${pct}%` }}
+                        transition={{ duration: 0.4 }}
+                      />
+                    </div>
+                    <div className="mt-2 text-sm text-white/60">
+                      {done.toLocaleString()} / {total.toLocaleString()} emails vectorized
+                    </div>
+                  </div>
+                  <p className="text-sm text-white/40">
+                    {complete
+                      ? 'Memory built. Your emails are now searchable.'
+                      : 'This may take a few minutes. You can close this window — it keeps running.'}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    className="self-start rounded-full bg-white px-5 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90"
+                  >
+                    {complete ? 'Done' : 'Close'}
+                  </button>
+                </>
+              )
+            })()}
+          </div>
         )}
 
         {step === 'done' && (

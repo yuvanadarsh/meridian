@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import get_settings
 from db.database import get_db
 from models.gmail import SweepOptions, TriageApproval
-from services import gmail_service, triage_service
+from services import gmail_service, triage_service, vector_service
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -160,15 +160,42 @@ async def discard_sweep(account_id: int, db: AsyncSession = Depends(get_db)):
 async def approve_triage(
     account_id: int,
     payload: TriageApproval,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
-    """Apply approved triage to Gmail. The ONLY endpoint that mutates Gmail."""
+    """Apply approved triage to Gmail, then start vectorizing keep/archive emails.
+
+    The ONLY endpoint that mutates Gmail.
+    """
     accounts = await gmail_service.list_accounts(db)
     if not any(account["id"] == account_id for account in accounts):
         raise HTTPException(status_code=404, detail="Account not found")
     overrides = [{"id": item.id, "status": item.status} for item in payload.overrides]
     try:
-        return await triage_service.apply_triage(account_id, db, overrides=overrides)
+        result = await triage_service.apply_triage(account_id, db, overrides=overrides)
     except Exception as exc:  # noqa: BLE001
         logger.exception("Failed to apply triage for account %s", account_id)
         raise HTTPException(status_code=500, detail=f"Failed to apply triage: {exc}") from exc
+    # Build memory from the surviving keep + archive emails.
+    background_tasks.add_task(vector_service.run_vectorize_background, account_id)
+    return result
+
+
+@router.post("/vectorize/{account_id}")
+async def start_vectorize(
+    account_id: int,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    """Embed an account's keep/archive emails (background task)."""
+    accounts = await gmail_service.list_accounts(db)
+    if not any(account["id"] == account_id for account in accounts):
+        raise HTTPException(status_code=404, detail="Account not found")
+    background_tasks.add_task(vector_service.run_vectorize_background, account_id)
+    return {"status": "started", "account_id": account_id}
+
+
+@router.get("/vectorize/progress/{account_id}")
+async def vectorize_progress(account_id: int, db: AsyncSession = Depends(get_db)):
+    """Return how many keep/archive emails have been embedded so far."""
+    return await vector_service.vectorize_progress(account_id, db)
