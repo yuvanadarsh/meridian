@@ -19,3 +19,20 @@ class SweepOptions(BaseModel):
     mode: Literal["all", "count", "since"] = "all"
     count: int | None = None
     since_date: str | None = None
+
+
+class TriageOverride(BaseModel):
+    """A user change to one email's triage category during review."""
+
+    id: int
+    status: Literal["keep", "archive", "trash"]
+
+
+class TriageApproval(BaseModel):
+    """Approve triage, carrying only the emails the user re-categorized.
+
+    Everything else applies with the category Claude assigned during the sweep,
+    so the (possibly paginated) review UI never needs the full id lists.
+    """
+
+    overrides: list[TriageOverride] = []

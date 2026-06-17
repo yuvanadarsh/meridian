@@ -8,9 +8,11 @@ import type {
   SweepMode,
   SweepProgress,
   TriageCounts,
+  TriageOverride,
 } from '../../api/client'
+import TriageReview from './TriageReview'
 
-type Step = 'options' | 'progress' | 'done'
+type Step = 'options' | 'progress' | 'review' | 'done'
 
 interface OnboardingProps {
   accountId: number
@@ -31,6 +33,8 @@ export function Onboarding({ accountId, onClose }: OnboardingProps) {
   const [sinceDate, setSinceDate] = useState('')
   const [progress, setProgress] = useState<SweepProgress | null>(null)
   const [counts, setCounts] = useState<TriageCounts | null>(null)
+  const [applying, setApplying] = useState(false)
+  const [applied, setApplied] = useState<{ trashed: number; archived: number } | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   // Load the account label/email and a rough mailbox-size estimate.
@@ -62,14 +66,17 @@ export function Onboarding({ accountId, onClose }: OnboardingProps) {
         const next = await api.getSweepProgress(accountId)
         if (cancelled) return
         setProgress(next)
-        if (next.status === 'completed' || next.status === 'triage_complete') {
+        if (next.status === 'triage_complete') {
           try {
             const results = await api.getTriageResults(accountId)
-            if (!cancelled) setCounts(results.counts)
+            if (cancelled) return
+            setCounts(results.counts)
+            setStep('review')
           } catch {
-            // Counts are best-effort; the done screen falls back to the tally.
+            if (!cancelled) setStep('done') // couldn't load counts — just confirm
           }
-          if (!cancelled) setStep('done')
+        } else if (next.status === 'completed') {
+          if (!cancelled) setStep('done') // swept without triage (no API key)
         } else if (next.status === 'error') {
           setError(next.error || 'The sweep failed.')
         }
@@ -100,6 +107,32 @@ export function Onboarding({ accountId, onClose }: OnboardingProps) {
     }
   }
 
+  const applyTriage = async (overrides: TriageOverride[]) => {
+    setApplying(true)
+    setError(null)
+    try {
+      const result = await api.approveTriage(accountId, overrides)
+      setApplied(result)
+      setStep('done')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not apply triage.')
+    } finally {
+      setApplying(false)
+    }
+  }
+
+  const discard = async () => {
+    if (!window.confirm('Discard this sweep? The swept emails are removed locally (Gmail is untouched).')) {
+      return
+    }
+    try {
+      await api.discardSweep(accountId)
+    } catch {
+      // Even if the discard call fails, close out of onboarding.
+    }
+    onClose()
+  }
+
   const fetchedPct = useMemo(() => {
     if (!progress || progress.total_estimated <= 0) return 0
     return Math.min(100, Math.round((progress.fetched / progress.total_estimated) * 100))
@@ -113,7 +146,7 @@ export function Onboarding({ accountId, onClose }: OnboardingProps) {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
     >
-      <div className="w-full max-w-lg">
+      <div className={`w-full ${step === 'review' ? 'max-w-2xl' : 'max-w-lg'}`}>
         {step === 'options' && (
           <div className="flex flex-col gap-6">
             <div>
@@ -240,28 +273,36 @@ export function Onboarding({ accountId, onClose }: OnboardingProps) {
           </div>
         )}
 
+        {step === 'review' && counts && (
+          <TriageReview
+            accountId={accountId}
+            email={email}
+            counts={counts}
+            applying={applying}
+            onApply={(overrides) => void applyTriage(overrides)}
+            onDiscard={() => void discard()}
+          />
+        )}
+
         {step === 'done' && (
           <div className="flex flex-col items-center gap-5 text-center">
             <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-400/15 text-emerald-300">
               <FiCheck size={24} />
             </div>
             <div className="text-xl font-semibold">
-              {counts ? 'Inbox analyzed' : 'Sweep complete'}
+              {applied ? 'Triage applied' : 'Sweep complete'}
             </div>
             <p className="text-sm text-white/60">
-              Swept {progress?.stored.toLocaleString() ?? 0} new emails from {email}
-              {progress && progress.skipped > 0
-                ? ` (${progress.skipped.toLocaleString()} already synced).`
-                : '.'}
+              {applied
+                ? `Trashed ${applied.trashed.toLocaleString()} and archived ${applied.archived.toLocaleString()} emails in ${email}.`
+                : `Swept ${progress?.stored.toLocaleString() ?? 0} new emails from ${email}${
+                    progress && progress.skipped > 0
+                      ? ` (${progress.skipped.toLocaleString()} already synced).`
+                      : '.'
+                  }`}
             </p>
 
-            {counts && (
-              <div className="flex gap-3">
-                <CountPill label="Trash" value={counts.trash} tone="rose" />
-                <CountPill label="Archive" value={counts.archive} tone="sky" />
-                <CountPill label="Keep" value={counts.keep} tone="emerald" />
-              </div>
-            )}
+            {error && <p className="text-sm text-rose-300/80">{error}</p>}
 
             <button
               type="button"
@@ -323,32 +364,6 @@ function PhaseRow({ done, label }: { done: boolean; label: string }) {
         <FiLoader className="animate-spin text-white/50" size={16} />
       )}
       <span className={done ? 'text-white/70' : 'text-white'}>{label}</span>
-    </div>
-  )
-}
-
-const COUNT_TONES = {
-  rose: 'text-rose-300',
-  sky: 'text-sky-300',
-  emerald: 'text-emerald-300',
-} as const
-
-/** A single triage-category tally shown after classification. */
-function CountPill({
-  label,
-  value,
-  tone,
-}: {
-  label: string
-  value: number
-  tone: keyof typeof COUNT_TONES
-}) {
-  return (
-    <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3">
-      <div className={`text-lg font-semibold ${COUNT_TONES[tone]}`}>
-        {value.toLocaleString()}
-      </div>
-      <div className="text-xs text-white/40">{label}</div>
     </div>
   )
 }

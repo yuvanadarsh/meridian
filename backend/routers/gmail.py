@@ -7,12 +7,12 @@ import asyncio
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from fastapi.responses import RedirectResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import get_settings
 from db.database import get_db
-from models.gmail import SweepOptions
+from models.gmail import SweepOptions, TriageApproval
 from services import gmail_service, triage_service
 
 logger = logging.getLogger(__name__)
@@ -132,14 +132,43 @@ async def triage_results(account_id: int, db: AsyncSession = Depends(get_db)):
     return await triage_service.get_triage_results(account_id, db)
 
 
+@router.get("/triage/emails/{account_id}")
+async def triage_emails(
+    account_id: int,
+    status: str = Query(..., pattern="^(trash|archive|keep|unreadable)$"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return one page of emails in a triage category (with AI summaries)."""
+    return await triage_service.get_triage_emails(account_id, db, status, limit, offset)
+
+
+@router.get("/triage/report/{account_id}", response_class=PlainTextResponse)
+async def triage_report(account_id: int, db: AsyncSession = Depends(get_db)):
+    """Plain-text report of every triaged email, grouped by category."""
+    return await triage_service.build_triage_report(account_id, db)
+
+
+@router.post("/triage/discard/{account_id}")
+async def discard_sweep(account_id: int, db: AsyncSession = Depends(get_db)):
+    """Discard an account's swept emails locally (Gmail untouched)."""
+    return await triage_service.discard_sweep(account_id, db)
+
+
 @router.post("/triage/approve/{account_id}")
-async def approve_triage(account_id: int, db: AsyncSession = Depends(get_db)):
+async def approve_triage(
+    account_id: int,
+    payload: TriageApproval,
+    db: AsyncSession = Depends(get_db),
+):
     """Apply approved triage to Gmail. The ONLY endpoint that mutates Gmail."""
     accounts = await gmail_service.list_accounts(db)
     if not any(account["id"] == account_id for account in accounts):
         raise HTTPException(status_code=404, detail="Account not found")
+    overrides = [{"id": item.id, "status": item.status} for item in payload.overrides]
     try:
-        return await triage_service.apply_triage(account_id, db)
+        return await triage_service.apply_triage(account_id, db, overrides=overrides)
     except Exception as exc:  # noqa: BLE001
         logger.exception("Failed to apply triage for account %s", account_id)
         raise HTTPException(status_code=500, detail=f"Failed to apply triage: {exc}") from exc

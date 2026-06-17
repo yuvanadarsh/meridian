@@ -79,6 +79,21 @@ export interface TriageCounts {
   pending: number
 }
 
+export type TriageStatus = 'trash' | 'archive' | 'keep'
+
+export interface TriageEmail {
+  id: number
+  from_address: string | null
+  subject: string | null
+  summary: string | null
+  received_at: string | null
+}
+
+export interface TriageOverride {
+  id: number
+  status: TriageStatus
+}
+
 export const api = {
   baseUrl: API_URL,
   getAccounts: () => request<GmailAccount[]>('/gmail/accounts'),
@@ -105,4 +120,20 @@ export const api = {
     request<SweepProgress>(`/gmail/sweep/progress/${accountId}`),
   getTriageResults: (accountId: number) =>
     request<{ counts: TriageCounts }>(`/gmail/triage/results/${accountId}`),
+  getTriageEmails: (accountId: number, status: TriageStatus, limit = 50, offset = 0) =>
+    request<{ emails: TriageEmail[] }>(
+      `/gmail/triage/emails/${accountId}?status=${status}&limit=${limit}&offset=${offset}`,
+    ),
+  approveTriage: (accountId: number, overrides: TriageOverride[]) =>
+    request<{ trashed: number; archived: number }>(`/gmail/triage/approve/${accountId}`, {
+      method: 'POST',
+      body: JSON.stringify({ overrides }),
+    }),
+  discardSweep: (accountId: number) =>
+    request<{ discarded: number }>(`/gmail/triage/discard/${accountId}`, { method: 'POST' }),
+  getTriageReport: async (accountId: number): Promise<string> => {
+    const response = await fetch(`${API_URL}/gmail/triage/report/${accountId}`)
+    if (!response.ok) throw new Error('Could not generate the report')
+    return response.text()
+  },
 }

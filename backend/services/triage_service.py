@@ -231,18 +231,123 @@ async def get_triage_results(account_id: int, db: AsyncSession) -> dict:
     return {"counts": counts, "samples": samples}
 
 
+async def get_triage_emails(
+    account_id: int,
+    db: AsyncSession,
+    status: str,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict:
+    """Return one page of emails in a triage category, newest first, with summaries."""
+    result = await db.execute(
+        text(
+            """
+            SELECT id, from_address, subject, summary, received_at
+            FROM emails
+            WHERE account_id = :account_id AND triage_status = :status
+            ORDER BY received_at DESC NULLS LAST
+            LIMIT :limit OFFSET :offset
+            """
+        ),
+        {"account_id": account_id, "status": status, "limit": limit, "offset": offset},
+    )
+    return {"emails": [dict(row) for row in result.mappings().all()]}
+
+
+async def build_triage_report(account_id: int, db: AsyncSession) -> str:
+    """Build a plain-text report of every triaged email, grouped by category."""
+    result = await db.execute(
+        text(
+            """
+            SELECT triage_status, from_address, subject, summary, received_at
+            FROM emails
+            WHERE account_id = :account_id
+              AND triage_status IN ('trash', 'archive', 'keep')
+            ORDER BY triage_status, received_at DESC NULLS LAST
+            """
+        ),
+        {"account_id": account_id},
+    )
+    rows = result.mappings().all()
+    lines = [f"Meridian triage report — account {account_id}", ""]
+    for status in ("trash", "archive", "keep"):
+        items = [row for row in rows if row["triage_status"] == status]
+        lines.append(f"## {status.upper()} ({len(items)})")
+        for row in items:
+            when = row["received_at"].date().isoformat() if row["received_at"] else "????-??-??"
+            sender = row["from_address"] or "(unknown sender)"
+            subject = row["subject"] or "(no subject)"
+            lines.append(f"- [{when}] {sender} — {subject}")
+            if row["summary"]:
+                lines.append(f"    {row['summary']}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+async def discard_sweep(account_id: int, db: AsyncSession) -> dict:
+    """Throw away an account's swept emails locally and reset its progress.
+
+    Local only — Gmail is never touched. Used by the "Discard Sweep" action.
+    """
+    await db.execute(
+        text(
+            """
+            UPDATE calendar_events SET source_email_id = NULL
+            WHERE source_email_id IN (SELECT id FROM emails WHERE account_id = :account_id)
+            """
+        ),
+        {"account_id": account_id},
+    )
+    result = await db.execute(
+        text("DELETE FROM emails WHERE account_id = :account_id"),
+        {"account_id": account_id},
+    )
+    await db.execute(
+        text(
+            """
+            UPDATE sweep_progress
+            SET status = 'idle', total_estimated = 0, fetched = 0, stored = 0,
+                skipped = 0, error = NULL, updated_at = NOW()
+            WHERE account_id = :account_id
+            """
+        ),
+        {"account_id": account_id},
+    )
+    await db.commit()
+    return {"discarded": result.rowcount or 0}
+
+
 def _chunked(items: list, size: int):
     for start in range(0, len(items), size):
         yield items[start : start + size]
 
 
-async def apply_triage(account_id: int, db: AsyncSession) -> dict:
+async def apply_triage(
+    account_id: int, db: AsyncSession, overrides: list[dict] | None = None
+) -> dict:
     """Apply approved triage to Gmail. THE ONLY PLACE GMAIL IS MUTATED.
+
+    ``overrides`` carries the emails the user re-categorized during review
+    (``[{"id", "status"}]``); they are persisted first, then the stored
+    categories are applied:
 
     - trash:   moved to Gmail trash, then deleted from the database
     - archive: removed from the Gmail inbox, kept in the database
     - keep:    untouched
     """
+    # Persist the user's review overrides before reading stored statuses.
+    for override in overrides or []:
+        if override.get("status") in VALID_STATUSES:
+            await db.execute(
+                text(
+                    "UPDATE emails SET triage_status = :status "
+                    "WHERE id = :id AND account_id = :account_id"
+                ),
+                {"status": override["status"], "id": override["id"], "account_id": account_id},
+            )
+    if overrides:
+        await db.commit()
+
     creds = await gmail_service.load_credentials(db, account_id)
     service = await asyncio.to_thread(
         lambda: gmail_service.build("gmail", "v1", credentials=creds, cache_discovery=False)
