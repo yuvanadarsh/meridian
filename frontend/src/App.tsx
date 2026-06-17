@@ -1,7 +1,6 @@
-import { RxHamburgerMenu } from 'react-icons/rx'
-
 import ChatHistory from './components/Chat/ChatHistory'
 import ChatInput from './components/Chat/ChatInput'
+import HamburgerMenu from './components/Menu/HamburgerMenu'
 import Orb from './components/Orb/Orb'
 import { useMeridianStore } from './store/meridianStore'
 
@@ -15,7 +14,6 @@ function App() {
   const messages = useMeridianStore((state) => state.messages)
   const tokensToday = useMeridianStore((state) => state.tokensToday)
   const addMessage = useMeridianStore((state) => state.addMessage)
-  const setMenuOpen = useMeridianStore((state) => state.setMenuOpen)
 
   // Wired to the Claude API in a later step; for now it echoes the user's turn.
   const handleSubmit = (text: string) => {
@@ -39,15 +37,7 @@ function App() {
         <ChatInput onSubmit={handleSubmit} />
       </div>
 
-      {/* Full slide-up menu is added in the next step. */}
-      <button
-        type="button"
-        aria-label="Open menu"
-        onClick={() => setMenuOpen(true)}
-        className="fixed bottom-6 left-6 z-10 flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-white/10 text-white/80 backdrop-blur transition-colors hover:bg-white/15 hover:text-white"
-      >
-        <RxHamburgerMenu size={20} />
-      </button>
+      <HamburgerMenu />
     </main>
   )
 }
