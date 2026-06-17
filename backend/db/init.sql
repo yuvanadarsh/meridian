@@ -74,3 +74,17 @@ CREATE TABLE IF NOT EXISTS contacts (
     embedding vector(1024),
     created_at TIMESTAMP DEFAULT NOW()
 );
+
+-- Tracks resumable email-sweep progress per account so a failed sweep can be
+-- observed and resumed (see gmail_service.sweep_account).
+CREATE TABLE IF NOT EXISTS sweep_progress (
+    account_id INTEGER PRIMARY KEY REFERENCES gmail_accounts(id),
+    status VARCHAR(20) DEFAULT 'idle',   -- idle, running, completed, error
+    total_estimated INTEGER DEFAULT 0,
+    fetched INTEGER DEFAULT 0,
+    stored INTEGER DEFAULT 0,
+    skipped INTEGER DEFAULT 0,
+    last_gmail_id VARCHAR(255),
+    error TEXT,
+    updated_at TIMESTAMP DEFAULT NOW()
+);

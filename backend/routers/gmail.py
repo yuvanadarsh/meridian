@@ -6,7 +6,7 @@ OAuth lives here now; the sweep and triage routes are added in later steps.
 import asyncio
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -66,3 +66,24 @@ async def gmail_callback(
 async def gmail_accounts(db: AsyncSession = Depends(get_db)):
     """List connected Gmail accounts."""
     return await gmail_service.list_accounts(db)
+
+
+@router.post("/sweep/{account_id}")
+async def start_sweep(
+    account_id: int,
+    background_tasks: BackgroundTasks,
+    max_messages: int = Query(500, ge=1, le=2000),
+    db: AsyncSession = Depends(get_db),
+):
+    """Kick off an email sweep for an account as a background task."""
+    accounts = await gmail_service.list_accounts(db)
+    if not any(account["id"] == account_id for account in accounts):
+        raise HTTPException(status_code=404, detail="Account not found")
+    background_tasks.add_task(gmail_service.run_sweep_background, account_id, max_messages)
+    return {"status": "started", "account_id": account_id}
+
+
+@router.get("/sweep/progress/{account_id}")
+async def sweep_progress(account_id: int, db: AsyncSession = Depends(get_db)):
+    """Return the current sweep progress for an account."""
+    return await gmail_service.get_sweep_progress(db, account_id)
