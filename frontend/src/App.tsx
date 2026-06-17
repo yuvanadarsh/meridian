@@ -28,8 +28,21 @@ function App() {
   const chatOpen = useMeridianStore((state) => state.chatOpen)
   const setChatOpen = useMeridianStore((state) => state.setChatOpen)
   const setMessages = useMeridianStore((state) => state.setMessages)
+  const setJustConnectedEmail = useMeridianStore((state) => state.setJustConnectedEmail)
   const { send, sending } = useChat()
   const { recording, supported, toggleRecording } = useVoice()
+
+  // After Google OAuth, the backend redirects to /?connected=<email>. Capture
+  // the email (handed off to the onboarding flow) and strip the query param so
+  // a refresh doesn't reprocess it and the address bar stays clean.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const connected = params.get('connected')
+    if (connected) {
+      setJustConnectedEmail(connected)
+      window.history.replaceState({}, '', window.location.pathname)
+    }
+  }, [setJustConnectedEmail])
 
   // Pre-load the recent conversation from the database so a refresh keeps the
   // thread intact. Best-effort: if the API is down the screen stays usable.

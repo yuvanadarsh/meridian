@@ -25,6 +25,8 @@ interface MeridianStore {
   menuOpen: boolean
   /** Which slide-up panel is showing, if any. */
   activePanel: ActivePanel
+  /** Email just connected via OAuth — hands off into the onboarding flow. */
+  justConnectedEmail: string | null
 
   setOrbState: (state: OrbState) => void
   addMessage: (msg: ChatMessage) => void
@@ -34,6 +36,7 @@ interface MeridianStore {
   setChatOpen: (open: boolean) => void
   setMenuOpen: (open: boolean) => void
   setActivePanel: (panel: ActivePanel) => void
+  setJustConnectedEmail: (email: string | null) => void
 }
 
 export const useMeridianStore = create<MeridianStore>((set) => ({
@@ -43,6 +46,7 @@ export const useMeridianStore = create<MeridianStore>((set) => ({
   chatOpen: false,
   menuOpen: false,
   activePanel: null,
+  justConnectedEmail: null,
 
   setOrbState: (orbState) => set({ orbState }),
   addMessage: (msg) => set((state) => ({ messages: [...state.messages, msg] })),
@@ -51,4 +55,5 @@ export const useMeridianStore = create<MeridianStore>((set) => ({
   setChatOpen: (chatOpen) => set({ chatOpen }),
   setMenuOpen: (menuOpen) => set({ menuOpen }),
   setActivePanel: (activePanel) => set({ activePanel }),
+  setJustConnectedEmail: (justConnectedEmail) => set({ justConnectedEmail }),
 }))
