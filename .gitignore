@@ -17,6 +17,7 @@ token*.json
 # Node / frontend
 node_modules/
 frontend/dist/
+*.tsbuildinfo
 
 # graphify
 graphify-out/cache/
