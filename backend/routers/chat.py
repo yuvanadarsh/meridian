@@ -1,7 +1,6 @@
 """Chat routes: Claude conversation with calendar context and token tracking."""
 
 import logging
-from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
@@ -64,14 +63,8 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
     if not settings.anthropic_api_key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not configured")
 
-    system = (
-        "You are Meridian, a personal AI assistant. You help the user manage their "
-        "email, calendar, and daily tasks. Be concise, direct, and helpful. "
-        f"Today is {date.today().isoformat()}."
-    )
-    context = await _calendar_context(payload.account_id, db)
-    if context:
-        system += "\n\n" + context
+    calendar_context = await _calendar_context(payload.account_id, db)
+    system = claude_service.build_system_prompt(calendar_context=calendar_context)
 
     messages = await _recent_history(db)
     messages.append({"role": "user", "content": payload.message})
