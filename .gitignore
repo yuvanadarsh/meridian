@@ -1,0 +1,28 @@
+# Secrets & environment
+.env
+
+# Python
+backend/.venv/
+.venv/
+backend/__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+
+# OAuth artifacts (tokens live in the database, never on disk in the repo)
+credentials.json
+client_secret*.json
+token*.json
+
+# Node / frontend
+node_modules/
+frontend/dist/
+
+# graphify
+graphify-out/cache/
+graphify-out/manifest.json
+graphify-out/cost.json
+
+# OS / editor
+.DS_Store
+*.log

@@ -1,0 +1,42 @@
+# Meridian — local development stack.
+#
+# Only two services run in Docker: the FastAPI backend and the Vite frontend.
+# PostgreSQL is NOT containerized — it runs on the host machine. The API
+# container reaches it via host.docker.internal (mapped to the host gateway so
+# this works on Linux as well as macOS/Windows).
+
+services:
+  api:
+    build: ./backend
+    container_name: meridian-api
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Force the host gateway hostname regardless of what .env says, so the
+      # container always talks to the host's local PostgreSQL install.
+      POSTGRES_HOST: host.docker.internal
+    volumes:
+      # Mount source for hot reload (uvicorn --reload).
+      - ./backend:/app
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    container_name: meridian-frontend
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_URL: ${API_URL:-http://localhost:8000}
+    volumes:
+      # Mount source for hot reload, but keep the container's node_modules.
+      - ./frontend:/app
+      - /app/node_modules
+    command: npm run dev -- --host 0.0.0.0
+    depends_on:
+      - api
+    restart: unless-stopped
