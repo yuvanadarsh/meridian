@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
@@ -16,7 +17,7 @@ from models.chat import (
     TokensToday,
     TokenUsage,
 )
-from services import calendar_service, claude_service, obsidian_service
+from services import calendar_service, claude_service, gmail_service, obsidian_service
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -26,18 +27,62 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 HISTORY_LIMIT = 10
 
 
-async def _calendar_context(account_id: int | None, db: AsyncSession) -> str:
-    """A compact summary of today's events, or empty string if none/no account."""
-    if account_id is None:
+async def _calendar_context(db: AsyncSession) -> str:
+    """Build a combined calendar block for all connected accounts.
+
+    Fetches today's events and upcoming events (next 7 days) across every
+    linked account. Returns empty string when there are no accounts or events
+    so nothing leaks into the system prompt.
+    """
+    try:
+        accounts = await gmail_service.list_accounts(db)
+    except Exception:
         return ""
-    events = await calendar_service.get_today(account_id, db)
-    if not events:
+    if not accounts:
         return ""
-    lines = []
-    for event in events:
-        start = event["start_time"].strftime("%H:%M") if event["start_time"] else "--:--"
-        lines.append(f"- {start} {event['title'] or '(untitled)'}")
-    return "Today's calendar:\n" + "\n".join(lines)
+
+    today = date.today()
+    today_lines: list[str] = []
+    upcoming_lines: list[str] = []
+
+    for account in accounts:
+        try:
+            today_events = await calendar_service.get_today(account["id"], db)
+            upcoming_events = await calendar_service.get_upcoming(account["id"], db)
+        except Exception:
+            continue
+
+        for event in today_events:
+            start = event["start_time"]
+            end = event["end_time"]
+            title = event["title"] or "(untitled)"
+            if start and end:
+                s = start.strftime("%I:%M %p").lstrip("0")
+                e = end.strftime("%I:%M %p").lstrip("0")
+                today_lines.append(f"- {s} – {e}: {title}")
+            elif start:
+                today_lines.append(f"- {start.strftime('%I:%M %p').lstrip('0')}: {title}")
+            else:
+                today_lines.append(f"- {title}")
+
+        for event in upcoming_events:
+            start = event["start_time"]
+            title = event["title"] or "(untitled)"
+            # Exclude events already shown in today's block.
+            if start and start.date() > today:
+                upcoming_lines.append(f"- {start.strftime('%B %-d')}: {title}")
+
+    if not today_lines and not upcoming_lines:
+        return ""
+
+    parts: list[str] = []
+    if today_lines:
+        parts.append(
+            f"CALENDAR (today, {today.strftime('%B %-d')}):\n" + "\n".join(today_lines)
+        )
+    if upcoming_lines:
+        parts.append("UPCOMING (next 7 days):\n" + "\n".join(upcoming_lines))
+    return "\n\n".join(parts)
 
 
 async def _recent_history(db: AsyncSession) -> list[dict]:
@@ -64,7 +109,7 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
     if not settings.anthropic_api_key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not configured")
 
-    calendar_context = await _calendar_context(payload.account_id, db)
+    calendar_context = await _calendar_context(db)
     obsidian_context = await obsidian_service.get_obsidian_context(payload.message, db)
     system = claude_service.build_system_prompt(
         calendar_context=calendar_context, obsidian_context=obsidian_context
