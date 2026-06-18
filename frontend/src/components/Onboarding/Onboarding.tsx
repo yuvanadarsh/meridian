@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { FiArrowRight, FiCheck, FiLoader } from 'react-icons/fi'
+import { FiArrowRight, FiCheck, FiLoader, FiAlertCircle } from 'react-icons/fi'
 
 import { api } from '../../api/client'
 import type {
@@ -29,7 +29,7 @@ interface OnboardingProps {
 export function Onboarding({ accountId, startAtReview = false, onClose }: OnboardingProps) {
   const [account, setAccount] = useState<GmailAccount | null>(null)
   const [estimate, setEstimate] = useState<number | null>(null)
-  const [step, setStep] = useState<Step>('options')
+  const [step, setStep] = useState<Step>(startAtReview ? 'review' : 'options')
   const [mode, setMode] = useState<SweepMode>('all')
   const [count, setCount] = useState(500)
   const [sinceDate, setSinceDate] = useState('')
@@ -364,6 +364,29 @@ export function Onboarding({ accountId, startAtReview = false, onClose }: Onboar
                 </>
               )
             })()}
+          </div>
+        )}
+
+        {step === 'review' && !counts && (
+          <div className="flex flex-col items-center gap-4 text-center">
+            {error ? (
+              <>
+                <FiAlertCircle className="text-rose-300" size={28} />
+                <p className="text-sm text-rose-300/80">{error}</p>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="text-sm text-white/40 transition-colors hover:text-white/70"
+                >
+                  Close
+                </button>
+              </>
+            ) : (
+              <>
+                <FiLoader className="animate-spin text-white/50" size={28} />
+                <p className="text-sm text-white/50">Loading triage results…</p>
+              </>
+            )}
           </div>
         )}
 
