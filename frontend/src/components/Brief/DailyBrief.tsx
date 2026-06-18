@@ -1,4 +1,7 @@
 import { useEffect, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
+import type { Components } from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import {
   FiCalendar,
   FiMail,
@@ -11,6 +14,20 @@ import type { IconType } from 'react-icons'
 
 import { api, type Digest } from '../../api/client'
 import { speak } from '../../api/speak'
+
+// Tailwind strips default list/heading styles, so re-apply via component props.
+const NEWS_MARKDOWN: Components = {
+  p: (props) => <p className="my-1 first:mt-0 last:mb-0 leading-relaxed" {...props} />,
+  strong: (props) => <strong className="font-semibold text-white/80" {...props} />,
+  ul: (props) => <ul className="my-1 list-disc space-y-0.5 pl-4" {...props} />,
+  ol: (props) => <ol className="my-1 list-decimal space-y-0.5 pl-4" {...props} />,
+  h1: (props) => <h1 className="my-2 text-sm font-semibold text-white/80" {...props} />,
+  h2: (props) => <h2 className="my-2 text-sm font-semibold text-white/80" {...props} />,
+  h3: (props) => <h3 className="my-1.5 text-xs font-semibold text-white/70" {...props} />,
+  a: (props) => (
+    <a className="underline underline-offset-2 hover:text-white/80" target="_blank" rel="noreferrer" {...props} />
+  ),
+}
 
 const TODAY_LABEL = new Date().toLocaleDateString('en-US', {
   month: 'long',
@@ -68,7 +85,7 @@ export function DailyBrief() {
         <>
           <Section icon={FiCalendar} title="Calendar" body={digest.calendar} />
           <Section icon={FiMail} title="Email" body={digest.emails} />
-          <Section icon={HiOutlineNewspaper} title="News" body={digest.news} />
+          <Section icon={HiOutlineNewspaper} title="News" body={digest.news} markdown />
           <Section icon={FiTrendingUp} title="Stocks" body={digest.stocks} />
 
           <button
@@ -88,10 +105,12 @@ function Section({
   icon: Icon,
   title,
   body,
+  markdown = false,
 }: {
   icon: IconType
   title: string
   body: string
+  markdown?: boolean
 }) {
   return (
     <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
@@ -99,9 +118,17 @@ function Section({
         <Icon size={16} />
         <span className="text-sm font-medium">{title}</span>
       </div>
-      <p className="whitespace-pre-wrap text-sm leading-relaxed text-white/60">
-        {body}
-      </p>
+      {markdown ? (
+        <div className="text-sm text-white/60">
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={NEWS_MARKDOWN}>
+            {body}
+          </ReactMarkdown>
+        </div>
+      ) : (
+        <p className="whitespace-pre-wrap text-sm leading-relaxed text-white/60">
+          {body}
+        </p>
+      )}
     </div>
   )
 }

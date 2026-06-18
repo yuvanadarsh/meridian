@@ -7,7 +7,8 @@ failure so a single flaky source never sinks the whole brief. The assembled
 
 import asyncio
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -61,7 +62,8 @@ async def get_stock_summary() -> str:
 
 _NEWS_PROMPT = """\
 Search for today's top news and summarize in these categories.
-For each category give 2-3 bullet points, one sentence each, no links.
+For each bullet point, include the source name in brackets at the end, like [Reuters] or [TechCrunch].
+Do not include full URLs — just the source name. Give 2-3 bullets per category.
 
 Categories:
 1. AI & Technology — new models, what people are building with AI, ML advances
@@ -85,13 +87,19 @@ async def get_news_digest() -> str:
         sync_client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
         response = sync_client.messages.create(
             model=DIGEST_MODEL,
-            max_tokens=1000,
+            max_tokens=1500,
             tools=[{"type": "web_search_20250305", "name": "web_search"}],
             messages=[{"role": "user", "content": _NEWS_PROMPT.format(today=today)}],
         )
-        return "\n".join(
+        raw = "\n".join(
             block.text for block in response.content if getattr(block, "type", None) == "text"
         ).strip()
+        # Strip LLM preamble lines before the actual content begins.
+        lines = [
+            ln for ln in raw.splitlines()
+            if not ln.strip().startswith(("I'll", "I will", "Let me"))
+        ]
+        return "\n".join(lines).strip()
 
     try:
         return await asyncio.to_thread(_run)
@@ -115,6 +123,16 @@ def _format_event_time(start: datetime | None, end: datetime | None) -> str:
 
 async def get_digest_calendar(db: AsyncSession) -> str:
     """Summarize today's and tomorrow's events across all accounts."""
+    # Resolve the user's display timezone from settings (defaults to Eastern).
+    tz_result = await db.execute(
+        text("SELECT value FROM user_settings WHERE key = 'timezone'")
+    )
+    tz_row = tz_result.fetchone()
+    try:
+        user_tz = ZoneInfo(tz_row[0] if tz_row else "America/New_York")
+    except Exception:  # noqa: BLE001 — bad zone key in settings
+        user_tz = ZoneInfo("America/New_York")
+
     try:
         accounts = await gmail_service.list_accounts(db)
     except Exception:  # noqa: BLE001
@@ -129,7 +147,14 @@ async def get_digest_calendar(db: AsyncSession) -> str:
         except Exception:  # noqa: BLE001
             continue
         for event in events:
-            when = _format_event_time(event["start_time"], event["end_time"])
+            # DB stores naive UTC; attach UTC tzinfo then convert to local before display.
+            start = event["start_time"]
+            end = event["end_time"]
+            if start:
+                start = start.replace(tzinfo=timezone.utc).astimezone(user_tz)
+            if end:
+                end = end.replace(tzinfo=timezone.utc).astimezone(user_tz)
+            when = _format_event_time(start, end)
             title = event["title"] or "(untitled)"
             lines.append(f"{when} — {title}")
 
