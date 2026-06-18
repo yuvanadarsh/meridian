@@ -155,6 +155,10 @@ export const api = {
     return response.text()
   },
 
+  // Calendar
+  syncCalendar: (accountId: number) =>
+    request<{ synced: number }>(`/calendar/sync/${accountId}`, { method: 'POST' }),
+
   // Onboarding — vectorization
   startVectorize: (accountId: number) =>
     request<{ status: string; account_id: number }>(`/gmail/vectorize/${accountId}`, {
