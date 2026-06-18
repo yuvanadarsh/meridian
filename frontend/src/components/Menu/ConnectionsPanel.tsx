@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
 import { FiCheck, FiPlus, FiTrash2, FiX } from 'react-icons/fi'
+import { HiChevronDown, HiOutlineCalendar } from 'react-icons/hi2'
 
 import { api } from '../../api/client'
 import type { GmailAccount } from '../../api/client'
@@ -19,11 +21,12 @@ function relativeTime(iso: string | null): string | null {
 
 /**
  * Lists every connected Google account with inline label editing, a sweep
- * shortcut into onboarding, and removal. Accounts are unlimited — the list
- * grows with each one connected; there are no fixed role slots.
+ * shortcut into onboarding, and removal. Each account has an expandable
+ * calendar-sync accordion. Only one accordion can be open at a time.
  */
 export function ConnectionsPanel() {
   const setOnboardingAccountId = useMeridianStore((state) => state.setOnboardingAccountId)
+  const setTriageReviewAccountId = useMeridianStore((state) => state.setTriageReviewAccountId)
   const setMenuOpen = useMeridianStore((state) => state.setMenuOpen)
   const setActivePanel = useMeridianStore((state) => state.setActivePanel)
 
@@ -34,6 +37,8 @@ export function ConnectionsPanel() {
   const [editLabel, setEditLabel] = useState('')
   const [adding, setAdding] = useState(false)
   const [newLabel, setNewLabel] = useState('')
+  const [openAccordionId, setOpenAccordionId] = useState<number | null>(null)
+  const [syncingId, setSyncingId] = useState<number | null>(null)
 
   const load = async () => {
     setLoading(true)
@@ -91,10 +96,31 @@ export function ConnectionsPanel() {
   }
 
   const sweep = (accountId: number) => {
-    // Launch onboarding for this account and get out of the menu's way.
     setOnboardingAccountId(accountId)
     setActivePanel(null)
     setMenuOpen(false)
+  }
+
+  const reviewTriage = (accountId: number) => {
+    setTriageReviewAccountId(accountId)
+    setActivePanel(null)
+    setMenuOpen(false)
+  }
+
+  const syncCalendar = async (accountId: number) => {
+    setSyncingId(accountId)
+    try {
+      await api.syncCalendar(accountId)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Calendar sync failed')
+    } finally {
+      setSyncingId(null)
+    }
+  }
+
+  const toggleAccordion = (accountId: number) => {
+    setOpenAccordionId((prev) => (prev === accountId ? null : accountId))
   }
 
   return (
@@ -112,75 +138,147 @@ export function ConnectionsPanel() {
 
         {accounts.map((account) => {
           const synced = relativeTime(account.last_synced_at)
+          const isOpen = openAccordionId === account.id
+          const isSyncing = syncingId === account.id
+
           return (
             <div
               key={account.id}
-              className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/5 px-4 py-3"
+              className="overflow-hidden rounded-xl border border-white/10 bg-white/5"
             >
-              <div className="min-w-0">
-                {editingId === account.id ? (
-                  <div className="flex items-center gap-1.5">
-                    <input
-                      autoFocus
-                      value={editLabel}
-                      onChange={(event) => setEditLabel(event.target.value)}
-                      onKeyDown={(event) => event.key === 'Enter' && void saveLabel(account.id)}
-                      className="w-28 rounded-md border border-white/10 bg-white/5 px-2 py-0.5 text-sm text-white focus:border-white/30 focus:outline-none"
-                      aria-label="Account label"
-                    />
+              {/* Account row */}
+              <div className="flex items-center justify-between gap-3 px-4 py-3">
+                <div className="min-w-0">
+                  {editingId === account.id ? (
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        autoFocus
+                        value={editLabel}
+                        onChange={(event) => setEditLabel(event.target.value)}
+                        onKeyDown={(event) => event.key === 'Enter' && void saveLabel(account.id)}
+                        className="w-28 rounded-md border border-white/10 bg-white/5 px-2 py-0.5 text-sm text-white focus:border-white/30 focus:outline-none"
+                        aria-label="Account label"
+                      />
+                      <button
+                        type="button"
+                        aria-label="Save label"
+                        onClick={() => void saveLabel(account.id)}
+                        className="text-white/60 hover:text-white"
+                      >
+                        <FiCheck size={16} />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label="Cancel"
+                        onClick={() => setEditingId(null)}
+                        className="text-white/40 hover:text-white"
+                      >
+                        <FiX size={16} />
+                      </button>
+                    </div>
+                  ) : (
                     <button
                       type="button"
-                      aria-label="Save label"
-                      onClick={() => void saveLabel(account.id)}
-                      className="text-white/60 hover:text-white"
+                      onClick={() => {
+                        setEditingId(account.id)
+                        setEditLabel(account.label ?? '')
+                      }}
+                      className="text-sm font-medium capitalize text-white hover:underline"
+                      title="Rename"
                     >
-                      <FiCheck size={16} />
+                      {account.label || 'unlabeled'}
                     </button>
-                    <button
-                      type="button"
-                      aria-label="Cancel"
-                      onClick={() => setEditingId(null)}
-                      className="text-white/40 hover:text-white"
-                    >
-                      <FiX size={16} />
-                    </button>
+                  )}
+                  <div className="truncate text-xs text-white/40">{account.email}</div>
+                  <div className="text-xs text-white/30">
+                    {synced ? `Synced ${synced}` : 'Not swept yet'}
                   </div>
-                ) : (
+                </div>
+
+                <div className="flex shrink-0 items-center gap-2">
+                  {account.sweep_status === 'triage_complete' && (
+                    <button
+                      type="button"
+                      onClick={() => reviewTriage(account.id)}
+                      className="rounded-full border border-amber-400/25 px-3 py-1 text-xs text-amber-300/80 transition-colors hover:bg-amber-400/10 hover:text-amber-200"
+                    >
+                      Review triage
+                    </button>
+                  )}
                   <button
                     type="button"
-                    onClick={() => {
-                      setEditingId(account.id)
-                      setEditLabel(account.label ?? '')
-                    }}
-                    className="text-sm font-medium capitalize text-white hover:underline"
-                    title="Rename"
+                    onClick={() => sweep(account.id)}
+                    className="rounded-full border border-white/15 px-3 py-1 text-xs text-white/80 transition-colors hover:bg-white/10 hover:text-white"
                   >
-                    {account.label || 'unlabeled'}
+                    {synced ? 'Re-sweep' : 'Sweep'}
                   </button>
-                )}
-                <div className="truncate text-xs text-white/40">{account.email}</div>
-                <div className="text-xs text-white/30">
-                  {synced ? `Synced ${synced}` : 'Not swept yet'}
+                  <button
+                    type="button"
+                    aria-label={`Remove ${account.email}`}
+                    onClick={() => void remove(account)}
+                    className="flex h-7 w-7 items-center justify-center rounded-full text-white/40 transition-colors hover:bg-rose-400/10 hover:text-rose-300"
+                  >
+                    <FiTrash2 size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={isOpen ? 'Collapse calendar section' : 'Expand calendar section'}
+                    onClick={() => toggleAccordion(account.id)}
+                    className="flex h-7 w-7 items-center justify-center rounded-full text-white/40 transition-colors hover:bg-white/10 hover:text-white"
+                  >
+                    <motion.span
+                      animate={{ rotate: isOpen ? 180 : 0 }}
+                      transition={{ duration: 0.2 }}
+                      className="flex"
+                    >
+                      <HiChevronDown size={14} />
+                    </motion.span>
+                  </button>
                 </div>
               </div>
 
-              <div className="flex shrink-0 items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => sweep(account.id)}
-                  className="rounded-full border border-white/15 px-3 py-1 text-xs text-white/80 transition-colors hover:bg-white/10 hover:text-white"
-                >
-                  {synced ? 'Re-sweep' : 'Sweep'}
-                </button>
-                <button
-                  type="button"
-                  aria-label={`Remove ${account.email}`}
-                  onClick={() => void remove(account)}
-                  className="flex h-7 w-7 items-center justify-center rounded-full text-white/40 transition-colors hover:bg-rose-400/10 hover:text-rose-300"
-                >
-                  <FiTrash2 size={14} />
-                </button>
-              </div>
+              {/* Calendar accordion */}
+              <AnimatePresence initial={false}>
+                {isOpen && (
+                  <motion.div
+                    key="calendar-accordion"
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.2, ease: 'easeInOut' }}
+                    className="overflow-hidden"
+                  >
+                    <div className="flex items-center justify-between border-t border-white/[0.06] px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <HiOutlineCalendar size={14} className="shrink-0 text-white/50" />
+                        <div>
+                          <div className="text-xs font-medium text-white/70">
+                            Calendar Integration
+                          </div>
+                          <div className="text-xs text-white/30">
+                            {synced ? `Last synced: ${synced}` : 'Never synced'}
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={isSyncing}
+                        onClick={() => void syncCalendar(account.id)}
+                        className="flex items-center gap-1.5 rounded-full border border-white/15 px-3 py-1 text-xs text-white/80 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-40"
+                      >
+                        {isSyncing ? (
+                          <>
+                            <span className="h-3 w-3 animate-spin rounded-full border border-white/40 border-t-white/80" />
+                            Syncing
+                          </>
+                        ) : (
+                          'Sync now'
+                        )}
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           )
         })}

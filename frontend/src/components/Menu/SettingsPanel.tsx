@@ -27,12 +27,12 @@ export function SettingsPanel() {
           aria-checked={voiceEnabled}
           onClick={() => setVoiceEnabled((value) => !value)}
           className={`relative h-6 w-11 rounded-full transition-colors ${
-            voiceEnabled ? 'bg-emerald-400/70' : 'bg-white/15'
+            voiceEnabled ? 'bg-green-500' : 'bg-white/20'
           }`}
         >
           <span
-            className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${
-              voiceEnabled ? 'translate-x-[22px]' : 'translate-x-0.5'
+            className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${
+              voiceEnabled ? 'translate-x-5' : 'translate-x-0'
             }`}
           />
         </button>

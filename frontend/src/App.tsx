@@ -33,6 +33,8 @@ function App() {
   const setJustConnectedEmail = useMeridianStore((state) => state.setJustConnectedEmail)
   const onboardingAccountId = useMeridianStore((state) => state.onboardingAccountId)
   const setOnboardingAccountId = useMeridianStore((state) => state.setOnboardingAccountId)
+  const triageReviewAccountId = useMeridianStore((state) => state.triageReviewAccountId)
+  const setTriageReviewAccountId = useMeridianStore((state) => state.setTriageReviewAccountId)
   const { send, sending } = useChat()
   const { recording, supported, toggleRecording } = useVoice()
 
@@ -149,10 +151,14 @@ function App() {
 
       <HamburgerMenu />
 
-      {onboardingAccountId !== null && (
+      {(onboardingAccountId !== null || triageReviewAccountId !== null) && (
         <Onboarding
-          accountId={onboardingAccountId}
-          onClose={() => setOnboardingAccountId(null)}
+          accountId={onboardingAccountId ?? triageReviewAccountId!}
+          startAtReview={triageReviewAccountId !== null}
+          onClose={() => {
+            setOnboardingAccountId(null)
+            setTriageReviewAccountId(null)
+          }}
         />
       )}
     </main>

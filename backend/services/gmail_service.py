@@ -111,13 +111,15 @@ async def upsert_account(
 
 
 async def list_accounts(db: AsyncSession) -> list[dict]:
-    """Return all connected accounts (without tokens)."""
+    """Return all connected accounts with their current sweep status."""
     result = await db.execute(
         text(
             """
-            SELECT id, email, label, last_synced_at
-            FROM gmail_accounts
-            ORDER BY id
+            SELECT ga.id, ga.email, ga.label, ga.last_synced_at,
+                   COALESCE(sp.status, 'idle') AS sweep_status
+            FROM gmail_accounts ga
+            LEFT JOIN sweep_progress sp ON sp.account_id = ga.id
+            ORDER BY ga.id
             """
         )
     )
@@ -398,11 +400,14 @@ async def _save_progress(
             """
             INSERT INTO sweep_progress (
                 account_id, status, total_estimated, fetched, stored, skipped,
-                last_gmail_id, error, updated_at
+                last_gmail_id, error,
+                sweep_completed_at, updated_at
             )
             VALUES (
                 :account_id, :status, :total_estimated, :fetched, :stored,
-                :skipped, :last_gmail_id, NULL, NOW()
+                :skipped, :last_gmail_id, NULL,
+                CASE WHEN :status = 'triage_complete' THEN NOW() ELSE NULL END,
+                NOW()
             )
             ON CONFLICT (account_id) DO UPDATE SET
                 status = EXCLUDED.status,
@@ -412,6 +417,10 @@ async def _save_progress(
                 skipped = EXCLUDED.skipped,
                 last_gmail_id = EXCLUDED.last_gmail_id,
                 error = NULL,
+                sweep_completed_at = CASE
+                    WHEN EXCLUDED.status = 'triage_complete' THEN NOW()
+                    ELSE sweep_progress.sweep_completed_at
+                END,
                 updated_at = NOW()
             """
         ),

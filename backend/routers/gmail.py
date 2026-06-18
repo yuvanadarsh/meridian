@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import get_settings
 from db.database import get_db
-from models.gmail import AccountUpdate, SweepOptions, TriageApproval
+from models.gmail import AccountUpdate, BulkTriageRequest, SweepOptions, TriageApproval
 from services import gmail_service, triage_service, vector_service
 
 logger = logging.getLogger(__name__)
@@ -158,7 +158,7 @@ async def triage_results(account_id: int, db: AsyncSession = Depends(get_db)):
 async def triage_emails(
     account_id: int,
     status: str = Query(..., pattern="^(trash|archive|keep|unreadable)$"),
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(50, ge=1, le=10000),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
@@ -201,6 +201,25 @@ async def approve_triage(
     # Build memory from the surviving keep + archive emails.
     background_tasks.add_task(vector_service.run_vectorize_background, account_id)
     return result
+
+
+@router.patch("/emails/triage/bulk")
+async def bulk_update_triage(
+    payload: BulkTriageRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Persist user reclassifications from the triage review UI without applying to Gmail.
+
+    This is a save-draft operation: it updates ``triage_status`` in the local
+    database so the review survives a refresh, but does not trash/archive
+    anything in Gmail — that happens on approval.
+    """
+    if not payload.changes:
+        return {"updated": 0}
+    updated = await triage_service.bulk_update_triage_status(
+        db, [(c.email_id, c.triage_status) for c in payload.changes]
+    )
+    return {"updated": updated}
 
 
 @router.post("/vectorize/{account_id}")

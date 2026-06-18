@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS emails (
     triage_status VARCHAR(20) DEFAULT 'pending',  -- 'keep', 'archive', 'trash', 'pending', 'unreadable'
     summary TEXT,                                 -- one-sentence AI summary (see migration 003)
     is_vectorized BOOLEAN DEFAULT FALSE,
-    embedding vector(1024),
+    embedding vector(512),
     created_at TIMESTAMP DEFAULT NOW()
 );
 
@@ -72,7 +72,7 @@ CREATE TABLE IF NOT EXISTS contacts (
     display_name VARCHAR(255),
     email_count INTEGER DEFAULT 0,
     last_contacted TIMESTAMP,
-    embedding vector(1024),
+    embedding vector(512),
     created_at TIMESTAMP DEFAULT NOW()
 );
 
@@ -97,7 +97,7 @@ CREATE TABLE IF NOT EXISTS obsidian_notes (
     title TEXT,
     content TEXT,
     wikilinks TEXT[],
-    embedding vector(1024),
+    embedding vector(512),
     last_modified TIMESTAMP,
     is_vectorized BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT NOW()

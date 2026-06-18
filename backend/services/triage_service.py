@@ -307,7 +307,7 @@ async def discard_sweep(account_id: int, db: AsyncSession) -> dict:
             """
             UPDATE sweep_progress
             SET status = 'idle', total_estimated = 0, fetched = 0, stored = 0,
-                skipped = 0, error = NULL, updated_at = NOW()
+                skipped = 0, error = NULL, sweep_completed_at = NULL, updated_at = NOW()
             WHERE account_id = :account_id
             """
         ),
@@ -393,6 +393,14 @@ async def apply_triage(
         ),
         {"account_id": account_id},
     )
+    # Mark the sweep as fully applied so the "Review triage" button is removed.
+    await db.execute(
+        text(
+            "UPDATE sweep_progress SET status = 'completed', sweep_completed_at = NULL, "
+            "updated_at = NOW() WHERE account_id = :account_id"
+        ),
+        {"account_id": account_id},
+    )
     await db.commit()
 
     logger.info(
@@ -402,3 +410,28 @@ async def apply_triage(
         len(archive_ids),
     )
     return {"trashed": len(trash_ids), "archived": len(archive_ids)}
+
+
+async def bulk_update_triage_status(
+    db: AsyncSession,
+    changes: list[tuple[int, str]],
+) -> int:
+    """Update triage_status for multiple emails in one transaction.
+
+    Args:
+        changes: List of (email_id, new_triage_status) pairs.
+
+    Returns:
+        Number of rows updated.
+    """
+    if not changes:
+        return 0
+    updated = 0
+    for email_id, status in changes:
+        result = await db.execute(
+            text("UPDATE emails SET triage_status = :status WHERE id = :id"),
+            {"status": status, "id": email_id},
+        )
+        updated += result.rowcount  # type: ignore[attr-defined]
+    await db.commit()
+    return updated
