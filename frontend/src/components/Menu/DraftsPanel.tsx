@@ -141,6 +141,7 @@ function DraftRow({ draft, onSent, onDiscarded, onEdited }: DraftRowProps) {
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, height: 0, marginBottom: 0 }}
+      transition={{ duration: 0.2 }}
       className="overflow-hidden rounded-2xl border border-white/10 bg-white/5"
     >
       <button
