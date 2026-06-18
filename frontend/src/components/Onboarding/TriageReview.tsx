@@ -155,7 +155,7 @@ export function TriageReview({
                 </button>
 
                 {isOpen && (
-                  <div className="max-h-[60vh] overflow-y-auto border-t border-white/[0.06]">
+                  <div className="border-t border-white/[0.06]">
                     {!loaded[status] && (
                       <div className="px-4 py-4 text-sm text-white/40">Loading…</div>
                     )}
