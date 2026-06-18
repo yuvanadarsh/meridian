@@ -130,6 +130,78 @@ async def sync_calendar(account_id: int, db: AsyncSession) -> dict:
     return {"synced": synced}
 
 
+# Meridian assumes the user's local timezone for events created from chat.
+DEFAULT_TIMEZONE = "America/New_York"
+
+
+async def create_event(
+    account_id: int,
+    title: str,
+    start_time: str,
+    end_time: str,
+    db: AsyncSession,
+    description: str = "",
+) -> dict:
+    """Create a Google Calendar event and mirror it into ``calendar_events``.
+
+    ``start_time`` / ``end_time`` are ISO 8601 strings without a timezone
+    suffix; they're interpreted in ``DEFAULT_TIMEZONE``. Returns the Google API
+    insert result.
+    """
+    creds = await gmail_service.load_credentials(db, account_id)
+    service = await asyncio.to_thread(
+        lambda: gmail_service.build(
+            "calendar", "v3", credentials=creds, cache_discovery=False
+        )
+    )
+
+    event_body = {
+        "summary": title,
+        "description": description,
+        "start": {"dateTime": start_time, "timeZone": DEFAULT_TIMEZONE},
+        "end": {"dateTime": end_time, "timeZone": DEFAULT_TIMEZONE},
+    }
+    result = await asyncio.to_thread(
+        lambda: service.events()
+        .insert(calendarId="primary", body=event_body)
+        .execute()
+    )
+
+    # Mirror into our local table so it shows up in digests/context immediately.
+    await db.execute(
+        text(
+            """
+            INSERT INTO calendar_events (
+                account_id, google_event_id, title, description,
+                start_time, end_time, attendees, meet_link
+            )
+            VALUES (
+                :account_id, :google_event_id, :title, :description,
+                :start_time, :end_time, :attendees, :meet_link
+            )
+            ON CONFLICT (google_event_id) DO UPDATE SET
+                title = EXCLUDED.title,
+                description = EXCLUDED.description,
+                start_time = EXCLUDED.start_time,
+                end_time = EXCLUDED.end_time
+            """
+        ),
+        {
+            "account_id": account_id,
+            "google_event_id": result["id"],
+            "title": result.get("summary", title),
+            "description": result.get("description", description),
+            "start_time": _parse_event_time(result.get("start")),
+            "end_time": _parse_event_time(result.get("end")),
+            "attendees": _attendee_emails(result),
+            "meet_link": _extract_meet_link(result),
+        },
+    )
+    await db.commit()
+    logger.info("Created calendar event %s for account %s", result["id"], account_id)
+    return result
+
+
 _EVENT_COLUMNS = (
     "id, google_event_id, title, description, start_time, end_time, attendees, meet_link"
 )

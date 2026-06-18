@@ -2,7 +2,7 @@
 
 import json
 import logging
-from datetime import date
+from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
@@ -143,7 +143,45 @@ async def _maybe_handle_action(reply: str, db: AsyncSession) -> str | None:
             return "I ran into a problem drafting that email."
         return "Draft saved to your Drafts panel."
 
+    if first_line.startswith("CALENDAR_CREATE:"):
+        try:
+            params = json.loads(first_line[len("CALENDAR_CREATE:") :])
+        except json.JSONDecodeError:
+            logger.warning("Malformed CALENDAR_CREATE token: %s", first_line)
+            return None
+        account_id = params.get("account_id")
+        if not account_id:
+            accounts = await gmail_service.list_accounts(db)
+            if not accounts:
+                return "I couldn't create that event — no account is connected yet."
+            account_id = accounts[0]["id"]
+        title = params.get("title", "Untitled event")
+        start = params.get("start", "")
+        end = params.get("end", "")
+        try:
+            await calendar_service.create_event(
+                account_id=account_id,
+                title=title,
+                start_time=start,
+                end_time=end,
+                db=db,
+                description=params.get("description", ""),
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("Calendar event creation from chat failed")
+            return "I ran into a problem creating that event."
+        return f"Done — {title} added to your calendar{_friendly_when(start)}."
+
     return None
+
+
+def _friendly_when(start: str) -> str:
+    """Render an ISO start time as ' for June 19 at 3:00 PM' (empty on parse failure)."""
+    try:
+        when = datetime.fromisoformat(start)
+    except (ValueError, TypeError):
+        return ""
+    return f" for {when.strftime('%B %-d')} at {when.strftime('%-I:%M %p')}"
 
 
 async def _recent_history(db: AsyncSession) -> list[dict]:

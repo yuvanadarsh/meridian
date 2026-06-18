@@ -87,6 +87,11 @@ def _action_protocol(accounts: list[dict]) -> str:
         'DRAFT_EMAIL:{"account_id":' + str(default_id) + ',"to_email":"...","subject":"...","context":"what the email should say","thread_email_id":null}\n'
         "Use the RELEVANT EMAILS context to fill to_email when replying to someone. "
         "If you cannot determine a recipient, leave to_email as an empty string.\n"
+        "If the user asks you to schedule, create, or add a calendar event, respond with ONLY this "
+        "JSON on the first line, then your confirmation message:\n"
+        'CALENDAR_CREATE:{"account_id":' + str(default_id) + ',"title":"...","start":"2026-06-19T15:00:00","end":"2026-06-19T16:00:00","description":""}\n'
+        "Times are local (America/New_York), ISO 8601, no timezone suffix. Default events to one "
+        "hour when the user gives only a start time.\n"
         "Only emit an action token when the user clearly requests that action."
     )
 

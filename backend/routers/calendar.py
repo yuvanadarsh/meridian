@@ -3,6 +3,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.database import get_db
@@ -11,6 +12,16 @@ from services import calendar_service, gmail_service
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/calendar", tags=["calendar"])
+
+
+class EventCreate(BaseModel):
+    """A new calendar event. Times are ISO 8601, local timezone, no suffix."""
+
+    account_id: int
+    title: str
+    start_time: str
+    end_time: str
+    description: str = ""
 
 
 async def _require_account(account_id: int, db: AsyncSession) -> None:
@@ -28,6 +39,26 @@ async def sync(account_id: int, db: AsyncSession = Depends(get_db)):
     except Exception as exc:  # noqa: BLE001
         logger.exception("Calendar sync failed for account %s", account_id)
         raise HTTPException(status_code=500, detail=f"Calendar sync failed: {exc}") from exc
+
+
+@router.post("/events")
+async def create_event(payload: EventCreate, db: AsyncSession = Depends(get_db)):
+    """Create a calendar event on an account's primary calendar."""
+    await _require_account(payload.account_id, db)
+    try:
+        return await calendar_service.create_event(
+            account_id=payload.account_id,
+            title=payload.title,
+            start_time=payload.start_time,
+            end_time=payload.end_time,
+            db=db,
+            description=payload.description,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Calendar event creation failed")
+        raise HTTPException(
+            status_code=502, detail=f"Could not create event: {exc}"
+        ) from exc
 
 
 @router.get("/today/{account_id}")
