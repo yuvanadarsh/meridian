@@ -1,6 +1,7 @@
 """Voice routes: text-to-speech via ElevenLabs."""
 
 import logging
+import re
 
 import aiohttp
 from fastapi import APIRouter, HTTPException
@@ -19,6 +20,30 @@ ELEVENLABS_TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
 ELEVENLABS_MODEL = "eleven_turbo_v2_5"
 
 
+def clean_for_tts(text: str) -> str:
+    """Strip markdown, emojis, and URLs so spoken audio sounds natural.
+
+    Responses are usually plain text already, but anything that leaks markdown
+    (or an emoji) reads badly aloud — this normalizes it to clean prose.
+    """
+    # Code blocks and inline code first (before other rules touch their contents).
+    text = re.sub(r"```[^`]*```", "", text, flags=re.DOTALL)
+    text = re.sub(r"`[^`]+`", "", text)
+    # Bold / italic markers.
+    text = re.sub(r"\*+([^*]+)\*+", r"\1", text)
+    # Headers and list markers at line starts.
+    text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^\s*[-*•]\s+", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^\s*\d+\.\s+", "", text, flags=re.MULTILINE)
+    # URLs and non-ASCII (emojis, arrows, etc.).
+    text = re.sub(r"https?://\S+", "", text)
+    text = re.sub(r"[^\x00-\x7F]+", "", text)
+    # Collapse whitespace.
+    text = re.sub(r"\n+", " ", text)
+    text = re.sub(r" {2,}", " ", text)
+    return text.strip()
+
+
 class SpeakRequest(BaseModel):
     text: str
 
@@ -31,6 +56,10 @@ async def speak(payload: SpeakRequest) -> Response:
             status_code=500, detail="ElevenLabs API key or voice ID is not configured"
         )
 
+    spoken_text = clean_for_tts(payload.text)
+    if not spoken_text:
+        raise HTTPException(status_code=400, detail="Nothing to speak after cleaning text")
+
     url = ELEVENLABS_TTS_URL.format(voice_id=settings.elevenlabs_voice_id)
     headers = {
         "xi-api-key": settings.elevenlabs_api_key,
@@ -38,7 +67,7 @@ async def speak(payload: SpeakRequest) -> Response:
         "Accept": "audio/mpeg",
     }
     body = {
-        "text": payload.text,
+        "text": spoken_text,
         "model_id": ELEVENLABS_MODEL,
         "voice_settings": {"stability": 0.5, "similarity_boost": 0.75},
     }
