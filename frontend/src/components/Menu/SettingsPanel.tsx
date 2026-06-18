@@ -17,6 +17,16 @@ const DIGEST_TIMES = Array.from({ length: 48 }, (_, i) => {
   return `${hour}:${minute}`
 })
 
+const TIMEZONES: { value: string; label: string }[] = [
+  { value: 'America/New_York', label: 'Eastern (ET)' },
+  { value: 'America/Chicago', label: 'Central (CT)' },
+  { value: 'America/Denver', label: 'Mountain (MT)' },
+  { value: 'America/Los_Angeles', label: 'Pacific (PT)' },
+  { value: 'America/Toronto', label: 'Toronto (ET)' },
+  { value: 'Europe/London', label: 'London (GMT/BST)' },
+  { value: 'Asia/Kolkata', label: 'India (IST)' },
+]
+
 /**
  * Settings: response tone, daily digest time, agent name, and a voice toggle.
  * Every value is loaded from and persisted to the backend (user_settings).
@@ -24,6 +34,7 @@ const DIGEST_TIMES = Array.from({ length: 48 }, (_, i) => {
 export function SettingsPanel() {
   const [tone, setTone] = useState<Tone>('concise')
   const [digestTime, setDigestTime] = useState('08:00')
+  const [timezone, setTimezone] = useState('America/New_York')
   const [agentName, setAgentName] = useState('Meridian')
   const [voiceEnabled, setVoiceEnabled] = useState(true)
   const [loading, setLoading] = useState(true)
@@ -36,6 +47,7 @@ export function SettingsPanel() {
         if (!active) return
         if (settings.response_tone) setTone(settings.response_tone as Tone)
         if (settings.digest_schedule) setDigestTime(settings.digest_schedule)
+        if (settings.timezone) setTimezone(settings.timezone)
         if (settings.agent_name) setAgentName(settings.agent_name)
         if (settings.voice_enabled) setVoiceEnabled(settings.voice_enabled === 'true')
       })
@@ -100,6 +112,25 @@ export function SettingsPanel() {
           {DIGEST_TIMES.map((time) => (
             <option key={time} value={time} className="bg-[#0d0d0f]">
               {time}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      {/* Timezone */}
+      <label className="flex flex-col gap-2">
+        <span className="text-sm text-white/70">Timezone</span>
+        <select
+          value={timezone}
+          onChange={(event) => {
+            setTimezone(event.target.value)
+            persist('timezone', event.target.value)
+          }}
+          className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-white focus:border-white/20 focus:outline-none"
+        >
+          {TIMEZONES.map((tz) => (
+            <option key={tz.value} value={tz.value} className="bg-[#0d0d0f]">
+              {tz.label}
             </option>
           ))}
         </select>
