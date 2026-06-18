@@ -20,6 +20,7 @@ from models.chat import (
 from services import (
     calendar_service,
     claude_service,
+    digest_service,
     draft_service,
     gmail_service,
     obsidian_service,
@@ -32,6 +33,21 @@ settings = get_settings()
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 HISTORY_LIMIT = 10
+
+# Phrases that mean "read me my daily brief" instead of a normal chat turn.
+_DIGEST_TRIGGERS = (
+    "digest",
+    "brief",
+    "morning brief",
+    "what's going on",
+    "whats going on",
+    "catch me up",
+)
+
+
+def _is_digest_request(message: str) -> bool:
+    text_lower = message.lower()
+    return any(trigger in text_lower for trigger in _DIGEST_TRIGGERS)
 
 
 async def _calendar_context(db: AsyncSession) -> str:
@@ -148,11 +164,73 @@ async def _recent_history(db: AsyncSession) -> list[dict]:
     return history
 
 
+async def _persist_exchange(
+    db: AsyncSession,
+    user_message: str,
+    reply: str,
+    *,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    total: int = 0,
+) -> None:
+    """Persist a user/assistant exchange, accumulate token usage, mirror to Obsidian."""
+    await db.execute(
+        text(
+            "INSERT INTO chat_messages (role, content, tokens_used) "
+            "VALUES ('user', :content, NULL)"
+        ),
+        {"content": user_message},
+    )
+    await db.execute(
+        text(
+            "INSERT INTO chat_messages (role, content, tokens_used) "
+            "VALUES ('assistant', :content, :tokens)"
+        ),
+        {"content": reply, "tokens": total},
+    )
+    # Accumulate today's usage rather than overwriting it.
+    await db.execute(
+        text(
+            """
+            INSERT INTO token_usage (session_date, input_tokens, output_tokens, total_tokens, updated_at)
+            VALUES (CURRENT_DATE, :input, :output, :total, NOW())
+            ON CONFLICT (session_date) DO UPDATE SET
+                input_tokens = token_usage.input_tokens + EXCLUDED.input_tokens,
+                output_tokens = token_usage.output_tokens + EXCLUDED.output_tokens,
+                total_tokens = token_usage.total_tokens + EXCLUDED.total_tokens,
+                updated_at = NOW()
+            """
+        ),
+        {"input": input_tokens, "output": output_tokens, "total": total},
+    )
+    await db.commit()
+
+    # Mirror the exchange into the Obsidian daily note (best-effort, no vault → no-op).
+    try:
+        await obsidian_service.append_exchange(user_message, reply)
+    except Exception:  # noqa: BLE001 — never fail a chat over a note write
+        logger.exception("Obsidian daily-note append failed")
+
+
 @router.post("/message", response_model=ChatResponse)
 async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db)):
     """Send a user message to Claude and persist the exchange + token usage."""
     if not settings.anthropic_api_key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not configured")
+
+    # "Give me the digest" short-circuits normal chat: build the brief and return
+    # its voice-ready text so callers (voice/TTS) read it aloud.
+    if _is_digest_request(payload.message):
+        try:
+            digest = await digest_service.build_digest(db)
+            reply = digest["full_text"]
+        except Exception:  # noqa: BLE001
+            logger.exception("Digest request failed")
+            reply = "I couldn't put together your brief right now."
+        await _persist_exchange(db, payload.message, reply, total=0)
+        return ChatResponse(
+            response=reply, tokens=TokenUsage(input=0, output=0, total=0)
+        )
 
     try:
         accounts = await gmail_service.list_accounts(db)
@@ -188,43 +266,14 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
     output_tokens = usage.output_tokens
     total = input_tokens + output_tokens
 
-    await db.execute(
-        text(
-            "INSERT INTO chat_messages (role, content, tokens_used) "
-            "VALUES ('user', :content, NULL)"
-        ),
-        {"content": payload.message},
+    await _persist_exchange(
+        db,
+        payload.message,
+        reply,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total=total,
     )
-    await db.execute(
-        text(
-            "INSERT INTO chat_messages (role, content, tokens_used) "
-            "VALUES ('assistant', :content, :tokens)"
-        ),
-        {"content": reply, "tokens": total},
-    )
-
-    # Accumulate today's usage rather than overwriting it.
-    await db.execute(
-        text(
-            """
-            INSERT INTO token_usage (session_date, input_tokens, output_tokens, total_tokens, updated_at)
-            VALUES (CURRENT_DATE, :input, :output, :total, NOW())
-            ON CONFLICT (session_date) DO UPDATE SET
-                input_tokens = token_usage.input_tokens + EXCLUDED.input_tokens,
-                output_tokens = token_usage.output_tokens + EXCLUDED.output_tokens,
-                total_tokens = token_usage.total_tokens + EXCLUDED.total_tokens,
-                updated_at = NOW()
-            """
-        ),
-        {"input": input_tokens, "output": output_tokens, "total": total},
-    )
-    await db.commit()
-
-    # Mirror the exchange into the Obsidian daily note (best-effort, no vault → no-op).
-    try:
-        await obsidian_service.append_exchange(payload.message, reply)
-    except Exception:  # noqa: BLE001 — never fail a chat over a note write
-        logger.exception("Obsidian daily-note append failed")
 
     return ChatResponse(
         response=reply,

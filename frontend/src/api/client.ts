@@ -112,6 +112,14 @@ export interface Draft {
   updated_at: string
 }
 
+export interface Digest {
+  calendar: string
+  emails: string
+  news: string
+  stocks: string
+  full_text: string
+}
+
 export const api = {
   baseUrl: API_URL,
   getAccounts: () => request<GmailAccount[]>('/gmail/accounts'),
@@ -190,4 +198,7 @@ export const api = {
     request<Draft>(`/drafts/${draftId}/send`, { method: 'POST' }),
   discardDraft: (draftId: number) =>
     request<{ status: string; id: number }>(`/drafts/${draftId}`, { method: 'DELETE' }),
+
+  // Digest
+  getDigest: () => request<Digest>('/digest/today'),
 }
