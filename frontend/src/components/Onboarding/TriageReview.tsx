@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { FiChevronDown, FiChevronRight, FiDownload, FiTrash2 } from 'react-icons/fi'
+import { FiChevronDown, FiChevronRight, FiDownload, FiLoader, FiTrash2 } from 'react-icons/fi'
 
 import { api } from '../../api/client'
 import type { TriageCounts, TriageEmail, TriageOverride, TriageStatus } from '../../api/client'
@@ -9,10 +9,8 @@ const CATEGORIES: { status: TriageStatus; title: string; note: string }[] = [
   { status: 'archive', title: 'Archive', note: 'Removed from inbox, kept in memory' },
   { status: 'keep', title: 'Keep', note: 'No action — stays in inbox' },
 ]
-const PAGE_SIZE = 50
 
-type EmailsByCategory = Record<TriageStatus, TriageEmail[]>
-type LoadedByCategory = Record<TriageStatus, boolean>
+type CategoryMap<T> = Record<TriageStatus, T>
 
 interface TriageReviewProps {
   accountId: number
@@ -38,43 +36,41 @@ export function TriageReview({
   onDiscard,
 }: TriageReviewProps) {
   const [expanded, setExpanded] = useState<TriageStatus | null>('trash')
-  const [emails, setEmails] = useState<EmailsByCategory>({ trash: [], archive: [], keep: [] })
-  const [loaded, setLoaded] = useState<LoadedByCategory>({
-    trash: false,
-    archive: false,
-    keep: false,
-  })
+  const [emails, setEmails] = useState<CategoryMap<TriageEmail[]>>({ trash: [], archive: [], keep: [] })
+  const [loaded, setLoaded] = useState<CategoryMap<boolean>>({ trash: false, archive: false, keep: false })
+  const [fetching, setFetching] = useState<CategoryMap<boolean>>({ trash: false, archive: false, keep: false })
   const [openEmailId, setOpenEmailId] = useState<number | null>(null)
   // Final category per email the user touched, and the category it started in.
   const [decisions, setDecisions] = useState<Record<number, TriageStatus>>({})
   const [originals, setOriginals] = useState<Record<number, TriageStatus>>({})
 
-  const loadCategory = async (status: TriageStatus, offset = 0) => {
-    const result = await api.getTriageEmails(accountId, status, PAGE_SIZE, offset)
-    setEmails((prev) => ({
-      ...prev,
-      [status]: offset === 0 ? result.emails : [...prev[status], ...result.emails],
-    }))
-    setLoaded((prev) => ({ ...prev, [status]: true }))
-    setOriginals((prev) => {
-      const next = { ...prev }
-      result.emails.forEach((item) => {
-        next[item.id] = status
+  const loadCategory = async (status: TriageStatus) => {
+    setFetching((prev) => ({ ...prev, [status]: true }))
+    try {
+      // Fetch every email in one request; backend limit raised to 10000.
+      const total = Math.max(counts[status], 1)
+      const result = await api.getTriageEmails(accountId, status, total, 0)
+      setEmails((prev) => ({ ...prev, [status]: result.emails }))
+      setLoaded((prev) => ({ ...prev, [status]: true }))
+      setOriginals((prev) => {
+        const next = { ...prev }
+        result.emails.forEach((item) => { next[item.id] = status })
+        return next
       })
-      return next
-    })
-    setDecisions((prev) => {
-      const next = { ...prev }
-      result.emails.forEach((item) => {
-        if (!(item.id in next)) next[item.id] = status
+      setDecisions((prev) => {
+        const next = { ...prev }
+        result.emails.forEach((item) => {
+          if (!(item.id in next)) next[item.id] = status
+        })
+        return next
       })
-      return next
-    })
+    } finally {
+      setFetching((prev) => ({ ...prev, [status]: false }))
+    }
   }
 
   useEffect(() => {
     if (expanded && !loaded[expanded]) void loadCategory(expanded)
-    // loadCategory is stable enough for this lazy-load on expand.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expanded])
 
@@ -156,35 +152,31 @@ export function TriageReview({
 
                 {isOpen && (
                   <div className="border-t border-white/[0.06]">
-                    {!loaded[status] && (
-                      <div className="px-4 py-4 text-sm text-white/40">Loading…</div>
+                    {fetching[status] && (
+                      <div className="flex items-center gap-2 px-4 py-4 text-sm text-white/40">
+                        <FiLoader className="animate-spin" size={14} />
+                        Loading {counts[status].toLocaleString()} emails…
+                      </div>
                     )}
                     {loaded[status] && rows.length === 0 && (
                       <div className="px-4 py-4 text-sm text-white/40">Nothing here.</div>
                     )}
-                    <ul className="divide-y divide-white/[0.04]">
-                      {rows.map((item) => (
-                        <TriageRow
-                          key={item.id}
-                          item={item}
-                          category={status}
-                          decision={decisions[item.id] ?? status}
-                          open={openEmailId === item.id}
-                          onToggleOpen={() =>
-                            setOpenEmailId(openEmailId === item.id ? null : item.id)
-                          }
-                          onDecision={(next) => setDecision(item.id, next)}
-                        />
-                      ))}
-                    </ul>
-                    {rows.length < counts[status] && (
-                      <button
-                        type="button"
-                        onClick={() => void loadCategory(status, rows.length)}
-                        className="w-full px-4 py-3 text-sm text-white/50 transition-colors hover:bg-white/[0.04] hover:text-white/80"
-                      >
-                        Load more ({(counts[status] - rows.length).toLocaleString()} remaining)
-                      </button>
+                    {rows.length > 0 && (
+                      <ul className="divide-y divide-white/[0.04]">
+                        {rows.map((item) => (
+                          <TriageRow
+                            key={item.id}
+                            item={item}
+                            category={status}
+                            decision={decisions[item.id] ?? status}
+                            open={openEmailId === item.id}
+                            onToggleOpen={() =>
+                              setOpenEmailId(openEmailId === item.id ? null : item.id)
+                            }
+                            onDecision={(next) => setDecision(item.id, next)}
+                          />
+                        ))}
+                      </ul>
                     )}
                   </div>
                 )}
