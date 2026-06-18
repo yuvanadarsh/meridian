@@ -324,23 +324,30 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
 
 @router.get("/messages", response_model=list[ChatMessageOut])
 async def get_messages(
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(100, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return the most recent messages, oldest first, to pre-load on page load."""
+    """Return today's messages oldest-first to pre-load on page open.
+
+    Only today's messages are returned — every morning the chat starts fresh.
+    Previous days are written to Obsidian daily notes and remain accessible
+    via RAG when the user asks about them.
+    """
     result = await db.execute(
         text(
             "SELECT role, content, created_at "
-            "FROM chat_messages ORDER BY id DESC LIMIT :limit"
+            "FROM chat_messages "
+            "WHERE DATE(created_at) = CURRENT_DATE "
+            "ORDER BY id ASC "
+            "LIMIT :limit"
         ),
         {"limit": limit},
     )
-    rows = list(reversed(result.mappings().all()))
     return [
         ChatMessageOut(
             role=row["role"], content=row["content"], created_at=row["created_at"]
         )
-        for row in rows
+        for row in result.mappings().all()
     ]
 
 
