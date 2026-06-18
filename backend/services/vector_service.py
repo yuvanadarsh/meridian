@@ -128,13 +128,14 @@ async def run_vectorize_background(account_id: int) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def get_email_context(query: str, db: AsyncSession, limit: int = 5) -> str:
+async def get_email_context(query: str, db: AsyncSession, limit: int = 10) -> str:
     """Return the most relevant keep/archive emails for ``query`` as prompt context.
 
     Embeds the query with the same VoyageAI model used to vectorize emails, then
-    runs a pgvector cosine-similarity search. Returns an empty string when there
-    is no key, no embedded emails, or on any failure — chat should never break
-    over missing context.
+    runs a pgvector cosine-similarity search. If fewer than 3 results come back
+    (low similarity across the board), falls back to an ILIKE keyword search on
+    subject and body. Returns an empty string on any failure — chat should never
+    break over missing context.
     """
     if not settings.voyage_api_key:
         return ""
@@ -148,8 +149,7 @@ async def get_email_context(query: str, db: AsyncSession, limit: int = 5) -> str
     result = await db.execute(
         text(
             """
-            SELECT from_address, subject, body_text, received_at,
-                   1 - (embedding <=> CAST(:embedding AS vector)) AS similarity
+            SELECT from_address, subject, body_text, received_at
             FROM emails
             WHERE is_vectorized = TRUE
               AND triage_status IN ('keep', 'archive')
@@ -160,7 +160,31 @@ async def get_email_context(query: str, db: AsyncSession, limit: int = 5) -> str
         ),
         {"embedding": to_pgvector(query_embedding), "limit": limit},
     )
-    emails = result.mappings().all()
+    emails = list(result.mappings().all())
+
+    # Keyword fallback when vector search finds too few matches
+    if len(emails) < 3:
+        seen_subjects = {e["subject"] for e in emails}
+        keywords = query.split()[:3]
+        for kw in keywords:
+            kw_result = await db.execute(
+                text(
+                    """
+                    SELECT from_address, subject, body_text, received_at
+                    FROM emails
+                    WHERE is_vectorized = TRUE
+                      AND triage_status IN ('keep', 'archive')
+                      AND (subject ILIKE :kw OR body_text ILIKE :kw)
+                    LIMIT 5
+                    """
+                ),
+                {"kw": f"%{kw}%"},
+            )
+            for row in kw_result.mappings().all():
+                if row["subject"] not in seen_subjects:
+                    emails.append(row)
+                    seen_subjects.add(row["subject"])
+
     if not emails:
         return ""
 
