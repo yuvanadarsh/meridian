@@ -16,7 +16,13 @@ from models.chat import (
     TokensToday,
     TokenUsage,
 )
-from services import calendar_service, claude_service, gmail_service, obsidian_service
+from services import (
+    calendar_service,
+    claude_service,
+    gmail_service,
+    obsidian_service,
+    vector_service,
+)
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -110,8 +116,11 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
 
     calendar_context = await _calendar_context(db)
     obsidian_context = await obsidian_service.get_obsidian_context(payload.message, db)
+    email_context = await vector_service.get_email_context(payload.message, db)
     system = claude_service.build_system_prompt(
-        calendar_context=calendar_context, obsidian_context=obsidian_context
+        calendar_context=calendar_context,
+        obsidian_context=obsidian_context,
+        email_context=email_context,
     )
 
     messages = await _recent_history(db)

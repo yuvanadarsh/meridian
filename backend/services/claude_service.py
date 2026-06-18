@@ -23,12 +23,13 @@ def build_system_prompt(
     *,
     calendar_context: str = "",
     obsidian_context: str = "",
+    email_context: str = "",
     today: str | None = None,
 ) -> str:
     """Assemble the chat system prompt.
 
-    Concise, voice-first rules followed by any calendar / Obsidian context.
-    Sections are omitted entirely when empty so the prompt stays tight.
+    Concise, voice-first rules followed by any calendar / email / Obsidian
+    context. Sections are omitted entirely when empty so the prompt stays tight.
     """
     today_date = today or date.today().isoformat()
     prompt = (
@@ -39,8 +40,10 @@ def build_system_prompt(
         "- No markdown formatting in responses — plain text only, since responses are spoken aloud.\n"
         "- Never suggest the user contact a developer or admin. You are the assistant.\n"
         "- Never claim you lack access to calendar or email data without first checking the context provided below.\n"
-        "- You cannot create, edit, or delete calendar events or send emails — say so plainly if asked."
+        "- You can create calendar events and draft emails when asked. You cannot delete events or send emails without the user's approval."
     )
+    if email_context:
+        prompt += "\n\nRELEVANT EMAILS:\n" + email_context
     for section in (calendar_context, obsidian_context):
         if section:
             prompt += "\n\n" + section
