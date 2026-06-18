@@ -95,6 +95,11 @@ export interface TriageOverride {
   status: TriageStatus
 }
 
+export interface TriageBulkChange {
+  email_id: number
+  triage_status: TriageStatus
+}
+
 export const api = {
   baseUrl: API_URL,
   getAccounts: () => request<GmailAccount[]>('/gmail/accounts'),
@@ -139,6 +144,11 @@ export const api = {
     }),
   discardSweep: (accountId: number) =>
     request<{ discarded: number }>(`/gmail/triage/discard/${accountId}`, { method: 'POST' }),
+  bulkUpdateTriage: (changes: TriageBulkChange[]) =>
+    request<{ updated: number }>('/gmail/emails/triage/bulk', {
+      method: 'PATCH',
+      body: JSON.stringify({ changes }),
+    }),
   getTriageReport: async (accountId: number): Promise<string> => {
     const response = await fetch(`${API_URL}/gmail/triage/report/${accountId}`)
     if (!response.ok) throw new Error('Could not generate the report')

@@ -42,3 +42,16 @@ class AccountUpdate(BaseModel):
     """Editable fields on a connected account."""
 
     label: str
+
+
+class BulkTriageChange(BaseModel):
+    """A single email reclassification from the triage review UI."""
+
+    email_id: int
+    triage_status: Literal["keep", "archive", "trash"]
+
+
+class BulkTriageRequest(BaseModel):
+    """Batch of user-initiated triage status changes to persist before approval."""
+
+    changes: list[BulkTriageChange] = []

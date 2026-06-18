@@ -410,3 +410,28 @@ async def apply_triage(
         len(archive_ids),
     )
     return {"trashed": len(trash_ids), "archived": len(archive_ids)}
+
+
+async def bulk_update_triage_status(
+    db: AsyncSession,
+    changes: list[tuple[int, str]],
+) -> int:
+    """Update triage_status for multiple emails in one transaction.
+
+    Args:
+        changes: List of (email_id, new_triage_status) pairs.
+
+    Returns:
+        Number of rows updated.
+    """
+    if not changes:
+        return 0
+    updated = 0
+    for email_id, status in changes:
+        result = await db.execute(
+            text("UPDATE emails SET triage_status = :status WHERE id = :id"),
+            {"status": status, "id": email_id},
+        )
+        updated += result.rowcount  # type: ignore[attr-defined]
+    await db.commit()
+    return updated
