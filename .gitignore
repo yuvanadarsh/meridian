@@ -19,10 +19,8 @@ node_modules/
 frontend/dist/
 *.tsbuildinfo
 
-# graphify
-graphify-out/cache/
-graphify-out/manifest.json
-graphify-out/cost.json
+# graphify — local analysis artifact (contains absolute machine paths)
+graphify-out/
 
 # OS / editor
 .DS_Store

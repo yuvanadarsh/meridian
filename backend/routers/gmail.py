@@ -7,12 +7,13 @@ import asyncio
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from fastapi.responses import RedirectResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import get_settings
 from db.database import get_db
-from services import gmail_service, triage_service
+from models.gmail import AccountUpdate, SweepOptions, TriageApproval
+from services import gmail_service, triage_service, vector_service
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -68,18 +69,60 @@ async def gmail_accounts(db: AsyncSession = Depends(get_db)):
     return await gmail_service.list_accounts(db)
 
 
+@router.patch("/accounts/{account_id}")
+async def update_account(
+    account_id: int,
+    payload: AccountUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Rename an account's label."""
+    updated = await gmail_service.update_account_label(db, account_id, payload.label)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return updated
+
+
+@router.delete("/accounts/{account_id}")
+async def delete_account(account_id: int, db: AsyncSession = Depends(get_db)):
+    """Remove an account and all of its emails and calendar events."""
+    deleted = await gmail_service.delete_account(db, account_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return {"deleted": True}
+
+
+@router.get("/estimate/{account_id}")
+async def estimate(account_id: int, db: AsyncSession = Depends(get_db)):
+    """Approximate how many messages the mailbox holds (for the sweep options UI)."""
+    accounts = await gmail_service.list_accounts(db)
+    if not any(account["id"] == account_id for account in accounts):
+        raise HTTPException(status_code=404, detail="Account not found")
+    try:
+        count = await gmail_service.estimate_count(db, account_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Failed to estimate mailbox size for account %s", account_id)
+        raise HTTPException(status_code=502, detail=f"Estimate failed: {exc}") from exc
+    return {"estimated_count": count}
+
+
 @router.post("/sweep/{account_id}")
 async def start_sweep(
     account_id: int,
+    options: SweepOptions,
     background_tasks: BackgroundTasks,
-    max_messages: int = Query(500, ge=1, le=2000),
     db: AsyncSession = Depends(get_db),
 ):
     """Kick off an email sweep for an account as a background task."""
     accounts = await gmail_service.list_accounts(db)
     if not any(account["id"] == account_id for account in accounts):
         raise HTTPException(status_code=404, detail="Account not found")
-    background_tasks.add_task(gmail_service.run_sweep_background, account_id, max_messages)
+    background_tasks.add_task(
+        gmail_service.run_sweep_background,
+        account_id,
+        mode=options.mode,
+        count=options.count,
+        since_date=options.since_date,
+    )
     return {"status": "started", "account_id": account_id}
 
 
@@ -111,14 +154,70 @@ async def triage_results(account_id: int, db: AsyncSession = Depends(get_db)):
     return await triage_service.get_triage_results(account_id, db)
 
 
+@router.get("/triage/emails/{account_id}")
+async def triage_emails(
+    account_id: int,
+    status: str = Query(..., pattern="^(trash|archive|keep|unreadable)$"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return one page of emails in a triage category (with AI summaries)."""
+    return await triage_service.get_triage_emails(account_id, db, status, limit, offset)
+
+
+@router.get("/triage/report/{account_id}", response_class=PlainTextResponse)
+async def triage_report(account_id: int, db: AsyncSession = Depends(get_db)):
+    """Plain-text report of every triaged email, grouped by category."""
+    return await triage_service.build_triage_report(account_id, db)
+
+
+@router.post("/triage/discard/{account_id}")
+async def discard_sweep(account_id: int, db: AsyncSession = Depends(get_db)):
+    """Discard an account's swept emails locally (Gmail untouched)."""
+    return await triage_service.discard_sweep(account_id, db)
+
+
 @router.post("/triage/approve/{account_id}")
-async def approve_triage(account_id: int, db: AsyncSession = Depends(get_db)):
-    """Apply approved triage to Gmail. The ONLY endpoint that mutates Gmail."""
+async def approve_triage(
+    account_id: int,
+    payload: TriageApproval,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    """Apply approved triage to Gmail, then start vectorizing keep/archive emails.
+
+    The ONLY endpoint that mutates Gmail.
+    """
     accounts = await gmail_service.list_accounts(db)
     if not any(account["id"] == account_id for account in accounts):
         raise HTTPException(status_code=404, detail="Account not found")
+    overrides = [{"id": item.id, "status": item.status} for item in payload.overrides]
     try:
-        return await triage_service.apply_triage(account_id, db)
+        result = await triage_service.apply_triage(account_id, db, overrides=overrides)
     except Exception as exc:  # noqa: BLE001
         logger.exception("Failed to apply triage for account %s", account_id)
         raise HTTPException(status_code=500, detail=f"Failed to apply triage: {exc}") from exc
+    # Build memory from the surviving keep + archive emails.
+    background_tasks.add_task(vector_service.run_vectorize_background, account_id)
+    return result
+
+
+@router.post("/vectorize/{account_id}")
+async def start_vectorize(
+    account_id: int,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    """Embed an account's keep/archive emails (background task)."""
+    accounts = await gmail_service.list_accounts(db)
+    if not any(account["id"] == account_id for account in accounts):
+        raise HTTPException(status_code=404, detail="Account not found")
+    background_tasks.add_task(vector_service.run_vectorize_background, account_id)
+    return {"status": "started", "account_id": account_id}
+
+
+@router.get("/vectorize/progress/{account_id}")
+async def vectorize_progress(account_id: int, db: AsyncSession = Depends(get_db)):
+    """Return how many keep/archive emails have been embedded so far."""
+    return await vector_service.vectorize_progress(account_id, db)

@@ -1,16 +1,22 @@
 """Chat routes: Claude conversation with calendar context and token tracking."""
 
+import asyncio
 import logging
-from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import get_settings
 from db.database import get_db
-from models.chat import ChatRequest, ChatResponse, TokensToday, TokenUsage
-from services import calendar_service, claude_service
+from models.chat import (
+    ChatMessageOut,
+    ChatRequest,
+    ChatResponse,
+    TokensToday,
+    TokenUsage,
+)
+from services import calendar_service, claude_service, obsidian_service
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -58,14 +64,11 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
     if not settings.anthropic_api_key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not configured")
 
-    system = (
-        "You are Meridian, a personal AI assistant. You help the user manage their "
-        "email, calendar, and daily tasks. Be concise, direct, and helpful. "
-        f"Today is {date.today().isoformat()}."
+    calendar_context = await _calendar_context(payload.account_id, db)
+    obsidian_context = await obsidian_service.get_obsidian_context(payload.message, db)
+    system = claude_service.build_system_prompt(
+        calendar_context=calendar_context, obsidian_context=obsidian_context
     )
-    context = await _calendar_context(payload.account_id, db)
-    if context:
-        system += "\n\n" + context
 
     messages = await _recent_history(db)
     messages.append({"role": "user", "content": payload.message})
@@ -112,10 +115,38 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
     )
     await db.commit()
 
+    # Mirror the exchange into the Obsidian daily note (best-effort, no vault → no-op).
+    try:
+        await asyncio.to_thread(obsidian_service.append_exchange, payload.message, reply)
+    except Exception:  # noqa: BLE001 — never fail a chat over a note write
+        logger.exception("Obsidian daily-note append failed")
+
     return ChatResponse(
         response=reply,
         tokens=TokenUsage(input=input_tokens, output=output_tokens, total=total),
     )
+
+
+@router.get("/messages", response_model=list[ChatMessageOut])
+async def get_messages(
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the most recent messages, oldest first, to pre-load on page load."""
+    result = await db.execute(
+        text(
+            "SELECT role, content, created_at "
+            "FROM chat_messages ORDER BY id DESC LIMIT :limit"
+        ),
+        {"limit": limit},
+    )
+    rows = list(reversed(result.mappings().all()))
+    return [
+        ChatMessageOut(
+            role=row["role"], content=row["content"], created_at=row["created_at"]
+        )
+        for row in rows
+    ]
 
 
 @router.get("/tokens/today", response_model=TokensToday)

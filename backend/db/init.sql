@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS emails (
     body_text TEXT,
     snippet TEXT,
     received_at TIMESTAMP,
-    triage_status VARCHAR(20) DEFAULT 'pending',  -- 'keep', 'archive', 'trash', 'pending'
+    triage_status VARCHAR(20) DEFAULT 'pending',  -- 'keep', 'archive', 'trash', 'pending', 'unreadable'
+    summary TEXT,                                 -- one-sentence AI summary (see migration 003)
     is_vectorized BOOLEAN DEFAULT FALSE,
     embedding vector(1024),
     created_at TIMESTAMP DEFAULT NOW()
@@ -79,7 +80,7 @@ CREATE TABLE IF NOT EXISTS contacts (
 -- observed and resumed (see gmail_service.sweep_account).
 CREATE TABLE IF NOT EXISTS sweep_progress (
     account_id INTEGER PRIMARY KEY REFERENCES gmail_accounts(id),
-    status VARCHAR(20) DEFAULT 'idle',   -- idle, running, completed, error
+    status VARCHAR(20) DEFAULT 'idle',   -- idle, running, classifying, triage_complete, completed, error
     total_estimated INTEGER DEFAULT 0,
     fetched INTEGER DEFAULT 0,
     stored INTEGER DEFAULT 0,
@@ -88,3 +89,18 @@ CREATE TABLE IF NOT EXISTS sweep_progress (
     error TEXT,
     updated_at TIMESTAMP DEFAULT NOW()
 );
+
+-- Obsidian vault notes ingested for RAG retrieval (see migration 002).
+CREATE TABLE IF NOT EXISTS obsidian_notes (
+    id SERIAL PRIMARY KEY,
+    file_path TEXT UNIQUE NOT NULL,
+    title TEXT,
+    content TEXT,
+    wikilinks TEXT[],
+    embedding vector(1024),
+    last_modified TIMESTAMP,
+    is_vectorized BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_obsidian_vectorized ON obsidian_notes(is_vectorized);

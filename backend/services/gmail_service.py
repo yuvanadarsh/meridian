@@ -124,6 +124,43 @@ async def list_accounts(db: AsyncSession) -> list[dict]:
     return [dict(row) for row in result.mappings().all()]
 
 
+async def update_account_label(
+    db: AsyncSession, account_id: int, label: str
+) -> dict | None:
+    """Rename an account's label. Returns the updated row, or None if missing."""
+    result = await db.execute(
+        text(
+            "UPDATE gmail_accounts SET label = :label WHERE id = :id "
+            "RETURNING id, email, label, last_synced_at"
+        ),
+        {"label": label, "id": account_id},
+    )
+    row = result.mappings().first()
+    await db.commit()
+    return dict(row) if row else None
+
+
+async def delete_account(db: AsyncSession, account_id: int) -> bool:
+    """Delete an account and everything that references it.
+
+    The foreign keys have no ON DELETE rule, so dependents are removed in
+    reference order first: calendar_events (point at emails + account), then
+    emails, then sweep_progress, then the account itself.
+    """
+    await db.execute(
+        text("DELETE FROM calendar_events WHERE account_id = :id"), {"id": account_id}
+    )
+    await db.execute(text("DELETE FROM emails WHERE account_id = :id"), {"id": account_id})
+    await db.execute(
+        text("DELETE FROM sweep_progress WHERE account_id = :id"), {"id": account_id}
+    )
+    result = await db.execute(
+        text("DELETE FROM gmail_accounts WHERE id = :id"), {"id": account_id}
+    )
+    await db.commit()
+    return (result.rowcount or 0) > 0
+
+
 async def load_credentials(db: AsyncSession, account_id: int) -> Credentials:
     """Load stored credentials for an account, refreshing them if expired.
 
@@ -248,33 +285,62 @@ async def fetch_with_backoff(service, gmail_id: str, max_retries: int = MAX_RETR
     raise RuntimeError(f"Max retries exceeded for message {gmail_id}")
 
 
-async def _list_message_ids(service, max_messages: int) -> list[str]:
-    """List up to ``max_messages`` message IDs, paginating as needed."""
+async def _list_message_ids(
+    service, max_messages: int | None = None, query: str | None = None
+) -> list[str]:
+    """List message IDs, paginating as needed.
+
+    ``max_messages=None`` lists the entire mailbox; ``query`` is a Gmail search
+    expression (e.g. ``after:2026/01/01``) used by date-bounded sweeps.
+    """
     ids: list[str] = []
     page_token: str | None = None
-    while len(ids) < max_messages:
-        remaining = max_messages - len(ids)
+    while max_messages is None or len(ids) < max_messages:
+        page_size = 500 if max_messages is None else min(500, max_messages - len(ids))
+        kwargs = {"userId": "me", "maxResults": page_size, "pageToken": page_token}
+        if query:
+            kwargs["q"] = query
         response = await asyncio.to_thread(
-            lambda: service.users()
-            .messages()
-            .list(userId="me", maxResults=min(500, remaining), pageToken=page_token)
-            .execute()
+            lambda: service.users().messages().list(**kwargs).execute()
         )
         ids.extend(message["id"] for message in response.get("messages", []))
         page_token = response.get("nextPageToken")
         if not page_token:
             break
-    return ids[:max_messages]
+    return ids if max_messages is None else ids[:max_messages]
 
 
-async def _store_email(db: AsyncSession, account_id: int, message: dict) -> bool:
-    """Insert one parsed email. Returns True if newly stored, False if a dup."""
+async def estimate_count(db: AsyncSession, account_id: int) -> int:
+    """Approximate the mailbox size via Gmail's resultSizeEstimate (one call)."""
+    creds = await load_credentials(db, account_id)
+    service = await asyncio.to_thread(
+        lambda: build("gmail", "v1", credentials=creds, cache_discovery=False)
+    )
+    response = await asyncio.to_thread(
+        lambda: service.users().messages().list(userId="me", maxResults=1).execute()
+    )
+    return int(response.get("resultSizeEstimate", 0))
+
+
+async def _store_email(db: AsyncSession, account_id: int, message: dict) -> dict:
+    """Insert one parsed email.
+
+    Returns ``{"id", "readable", "from_address", "subject", "snippet"}`` where
+    ``id`` is ``None`` for a duplicate (already swept). Emails with no subject,
+    body, AND sender are stored as ``unreadable`` and skip triage / vectorizing.
+    """
     payload = message.get("payload", {})
     headers = payload.get("headers", [])
 
     from_address = extract_header(headers, "From")[:255] or None
     to_raw = extract_header(headers, "To")
     to_addresses = [addr.strip() for addr in to_raw.split(",") if addr.strip()]
+    subject = extract_header(headers, "Subject") or None
+    body_text = extract_body(payload)
+    snippet = message.get("snippet", "")
+
+    readable = bool(subject or body_text.strip() or from_address)
+    triage_status = "pending" if readable else "unreadable"
 
     result = await db.execute(
         text(
@@ -285,7 +351,7 @@ async def _store_email(db: AsyncSession, account_id: int, message: dict) -> bool
             )
             VALUES (
                 :account_id, :gmail_id, :thread_id, :from_address, :to_addresses,
-                :subject, :body_text, :snippet, :received_at, 'pending'
+                :subject, :body_text, :snippet, :received_at, :triage_status
             )
             ON CONFLICT (gmail_id) DO NOTHING
             RETURNING id
@@ -297,15 +363,22 @@ async def _store_email(db: AsyncSession, account_id: int, message: dict) -> bool
             "thread_id": message.get("threadId"),
             "from_address": from_address,
             "to_addresses": to_addresses,
-            "subject": extract_header(headers, "Subject") or None,
-            "body_text": extract_body(payload),
-            "snippet": message.get("snippet", ""),
+            "subject": subject,
+            "body_text": body_text,
+            "snippet": snippet,
             "received_at": _parse_internal_date(message.get("internalDate")),
+            "triage_status": triage_status,
         },
     )
-    inserted = result.first() is not None
+    row = result.first()
     await db.commit()
-    return inserted
+    return {
+        "id": row[0] if row else None,
+        "readable": readable,
+        "from_address": from_address,
+        "subject": subject,
+        "snippet": snippet,
+    }
 
 
 async def _save_progress(
@@ -394,14 +467,37 @@ async def get_sweep_progress(db: AsyncSession, account_id: int) -> dict:
     return dict(row)
 
 
+def _ids_query(mode: str, count: int | None, since_date: str | None) -> tuple[int | None, str | None]:
+    """Translate sweep options into (max_messages, Gmail query)."""
+    if mode == "count":
+        return (count or DEFAULT_MAX_MESSAGES), None
+    if mode == "since" and since_date:
+        # Gmail's search syntax wants slashes: after:2026/01/31
+        return None, f"after:{since_date.replace('-', '/')}"
+    return None, None  # mode == "all"
+
+
 async def sweep_account(
-    account_id: int, db: AsyncSession, max_messages: int = DEFAULT_MAX_MESSAGES
+    account_id: int,
+    db: AsyncSession,
+    *,
+    mode: str = "all",
+    count: int | None = None,
+    since_date: str | None = None,
 ) -> dict:
-    """Fetch and store an account's messages with rate limiting and backoff.
+    """Fetch, store, and triage an account's messages in a single pass.
 
     Idempotent: re-running skips already-stored emails (ON CONFLICT DO NOTHING),
-    so an interrupted sweep resumes simply by being started again.
+    so an interrupted sweep resumes simply by being started again. Each batch of
+    fetched emails is classified + summarized by Claude in one call before moving
+    on, so the user reaches triage review without two long waits. Triage results
+    are written to the database only — Gmail is never mutated here.
     """
+    # Local import avoids a circular dependency (triage_service imports this one).
+    from services import triage_service
+
+    triage_enabled = bool(settings.anthropic_api_key)
+
     creds = await load_credentials(db, account_id)
     service = await asyncio.to_thread(
         lambda: build("gmail", "v1", credentials=creds, cache_discovery=False)
@@ -411,7 +507,8 @@ async def sweep_account(
         db, account_id, status="running", total_estimated=0, fetched=0, stored=0, skipped=0
     )
 
-    message_ids = await _list_message_ids(service, max_messages)
+    max_messages, query = _ids_query(mode, count, since_date)
+    message_ids = await _list_message_ids(service, max_messages=max_messages, query=query)
     total = len(message_ids)
 
     fetched = stored = skipped = 0
@@ -419,6 +516,7 @@ async def sweep_account(
 
     for start in range(0, total, SWEEP_BATCH_SIZE):
         batch = message_ids[start : start + SWEEP_BATCH_SIZE]
+        to_classify: list[dict] = []
         for gmail_id in batch:
             try:
                 message = await fetch_with_backoff(service, gmail_id)
@@ -428,18 +526,35 @@ async def sweep_account(
 
             fetched += 1
             last_id = gmail_id
-            if await _store_email(db, account_id, message):
+            stored_email = await _store_email(db, account_id, message)
+            if stored_email["id"] is not None:
                 stored += 1
+                # Unreadable emails are stored but skip triage + vectorization.
+                if stored_email["readable"]:
+                    to_classify.append(stored_email)
             else:
                 skipped += 1
 
             await asyncio.sleep(SWEEP_DELAY_SECONDS)
 
+        # Classify + summarize this batch in one Claude call, then persist.
+        if triage_enabled and to_classify:
+            results = await triage_service.classify_and_summarize_batch(to_classify)
+            for email, result in zip(to_classify, results):
+                await db.execute(
+                    text(
+                        "UPDATE emails SET triage_status = :status, summary = :summary "
+                        "WHERE id = :id"
+                    ),
+                    {"status": result["status"], "summary": result["summary"], "id": email["id"]},
+                )
+            await db.commit()
+
         # Persist progress at each batch boundary so the UI can follow along.
         await _save_progress(
             db,
             account_id,
-            status="running",
+            status="classifying" if triage_enabled else "running",
             total_estimated=total,
             fetched=fetched,
             stored=stored,
@@ -450,7 +565,7 @@ async def sweep_account(
     await _save_progress(
         db,
         account_id,
-        status="completed",
+        status="triage_complete" if triage_enabled else "completed",
         total_estimated=total,
         fetched=fetched,
         stored=stored,
@@ -474,12 +589,18 @@ async def sweep_account(
 
 
 async def run_sweep_background(
-    account_id: int, max_messages: int = DEFAULT_MAX_MESSAGES
+    account_id: int,
+    *,
+    mode: str = "all",
+    count: int | None = None,
+    since_date: str | None = None,
 ) -> None:
     """Entry point for FastAPI BackgroundTasks — owns its own DB session."""
     async with AsyncSessionLocal() as db:
         try:
-            await sweep_account(account_id, db, max_messages=max_messages)
+            await sweep_account(
+                account_id, db, mode=mode, count=count, since_date=since_date
+            )
         except Exception as exc:  # noqa: BLE001
             logger.exception("Background sweep failed for account %s", account_id)
             try:
