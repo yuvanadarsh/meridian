@@ -201,4 +201,12 @@ export const api = {
 
   // Digest
   getDigest: () => request<Digest>('/digest/today'),
+
+  // Settings
+  getSettings: () => request<Record<string, string>>('/settings'),
+  updateSetting: (key: string, value: string) =>
+    request<Record<string, string>>('/settings', {
+      method: 'PATCH',
+      body: JSON.stringify({ key, value }),
+    }),
 }

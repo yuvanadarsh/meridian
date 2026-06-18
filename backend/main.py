@@ -16,7 +16,17 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from config import get_settings
 from db.database import check_connection
-from routers import calendar, chat, digest, drafts, gmail, health, obsidian, voice
+from routers import (
+    calendar,
+    chat,
+    digest,
+    drafts,
+    gmail,
+    health,
+    obsidian,
+    settings as settings_router,
+    voice,
+)
 from services import obsidian_service
 
 logging.basicConfig(
@@ -72,6 +82,7 @@ app.include_router(voice.router)
 app.include_router(obsidian.router)
 app.include_router(drafts.router)
 app.include_router(digest.router)
+app.include_router(settings_router.router)
 
 
 # All failures return the shape { error: string, detail?: string }.

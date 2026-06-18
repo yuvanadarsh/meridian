@@ -24,6 +24,7 @@ from services import (
     draft_service,
     gmail_service,
     obsidian_service,
+    settings_service,
     vector_service,
 )
 
@@ -278,11 +279,13 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
     calendar_context = await _calendar_context(db)
     obsidian_context = await obsidian_service.get_obsidian_context(payload.message, db)
     email_context = await vector_service.get_email_context(payload.message, db)
+    tone = await settings_service.get_value(db, "response_tone")
     system = claude_service.build_system_prompt(
         calendar_context=calendar_context,
         obsidian_context=obsidian_context,
         email_context=email_context,
         accounts=accounts,
+        tone=tone,
     )
 
     messages = await _recent_history(db)
