@@ -78,8 +78,12 @@ calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
    ```
 
 3. (Optional) Point Meridian at your Obsidian vault for the memory layer by
-   setting `OBSIDIAN_VAULT_PATH` in `.env` to the vault's absolute path. When
-   unset, the daily-note writer and RAG retrieval simply no-op.
+   setting `OBSIDIAN_VAULT_PATH` in `.env` to the vault's **absolute path**
+   (e.g. `/Users/you/Documents/MyVault`). Docker Compose mounts this path
+   directly into the API container so daily-note writes and RAG reads go to
+   your real vault on disk — a relative path will silently write inside the
+   container instead. When unset, the daily-note writer and RAG retrieval
+   simply no-op.
 
 4. Start Meridian (FastAPI + Vite, connecting to your host PostgreSQL):
 
