@@ -221,10 +221,18 @@ async def _assemble_full_text(
 
 
 async def build_digest(db: AsyncSession) -> dict:
-    """Assemble the full daily digest. Sections are gathered concurrently."""
-    calendar, emails, news, stocks = await asyncio.gather(
-        get_digest_calendar(db),
-        get_digest_emails(db),
+    """Assemble the full daily digest.
+
+    DB-bound sections run sequentially — AsyncSession is not safe for concurrent
+    access from multiple coroutines. Non-DB sections (news, stocks) run concurrently
+    after the DB work is done.
+    """
+    # Sequential: shared AsyncSession cannot be used concurrently
+    calendar = await get_digest_calendar(db)
+    emails = await get_digest_emails(db)
+
+    # Concurrent: both hit external APIs, no shared DB session
+    news, stocks = await asyncio.gather(
         get_news_digest(),
         get_stock_summary(),
     )
