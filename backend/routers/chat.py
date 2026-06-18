@@ -1,5 +1,6 @@
 """Chat routes: Claude conversation with calendar context and token tracking."""
 
+import json
 import logging
 from datetime import date
 
@@ -19,6 +20,7 @@ from models.chat import (
 from services import (
     calendar_service,
     claude_service,
+    draft_service,
     gmail_service,
     obsidian_service,
     vector_service,
@@ -90,6 +92,44 @@ async def _calendar_context(db: AsyncSession) -> str:
     return "\n\n".join(parts)
 
 
+async def _maybe_handle_action(reply: str, db: AsyncSession) -> str | None:
+    """Intercept an action token Claude emitted and perform it.
+
+    Returns a clean confirmation message to replace the raw reply, or None when
+    the reply contains no action token (normal chat).
+    """
+    first_line, _, _ = reply.partition("\n")
+    first_line = first_line.strip()
+
+    if first_line.startswith("DRAFT_EMAIL:"):
+        try:
+            params = json.loads(first_line[len("DRAFT_EMAIL:") :])
+        except json.JSONDecodeError:
+            logger.warning("Malformed DRAFT_EMAIL token: %s", first_line)
+            return None
+        account_id = params.get("account_id")
+        if not account_id:
+            accounts = await gmail_service.list_accounts(db)
+            if not accounts:
+                return "I couldn't draft that — no email account is connected yet."
+            account_id = accounts[0]["id"]
+        try:
+            await draft_service.generate_draft(
+                account_id=account_id,
+                to_email=params.get("to_email", ""),
+                subject=params.get("subject", ""),
+                context=params.get("context", ""),
+                db=db,
+                thread_email_id=params.get("thread_email_id"),
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("Draft generation from chat failed")
+            return "I ran into a problem drafting that email."
+        return "Draft saved to your Drafts panel."
+
+    return None
+
+
 async def _recent_history(db: AsyncSession) -> list[dict]:
     """Return the last HISTORY_LIMIT messages, oldest first, starting with a user turn."""
     result = await db.execute(
@@ -114,6 +154,11 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
     if not settings.anthropic_api_key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not configured")
 
+    try:
+        accounts = await gmail_service.list_accounts(db)
+    except Exception:  # noqa: BLE001
+        accounts = []
+
     calendar_context = await _calendar_context(db)
     obsidian_context = await obsidian_service.get_obsidian_context(payload.message, db)
     email_context = await vector_service.get_email_context(payload.message, db)
@@ -121,6 +166,7 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
         calendar_context=calendar_context,
         obsidian_context=obsidian_context,
         email_context=email_context,
+        accounts=accounts,
     )
 
     messages = await _recent_history(db)
@@ -131,6 +177,12 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
     except Exception as exc:  # noqa: BLE001
         logger.exception("Claude chat request failed")
         raise HTTPException(status_code=502, detail=f"Claude request failed: {exc}") from exc
+
+    # If Claude emitted an action token (e.g. drafting an email), perform it and
+    # replace the raw reply with a clean confirmation before persisting/returning.
+    action_reply = await _maybe_handle_action(reply, db)
+    if action_reply is not None:
+        reply = action_reply
 
     input_tokens = usage.input_tokens
     output_tokens = usage.output_tokens
