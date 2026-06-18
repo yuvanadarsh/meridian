@@ -136,12 +136,12 @@ export function TriageReview({
           return (
             <div
               key={status}
-              className="overflow-hidden rounded-xl border border-white/10 bg-white/[0.03]"
+              className="rounded-xl border border-white/10 bg-white/[0.03]"
             >
               <button
                 type="button"
                 onClick={() => setExpanded(isOpen ? null : status)}
-                className="flex w-full items-center justify-between px-4 py-3 text-left transition-colors hover:bg-white/[0.04]"
+                className="sticky top-0 z-10 flex w-full items-center justify-between rounded-xl bg-[#0f1117]/95 px-4 py-3 text-left backdrop-blur-sm transition-colors hover:bg-white/[0.06]"
               >
                 <div className="flex items-center gap-2">
                   {isOpen ? <FiChevronDown size={16} /> : <FiChevronRight size={16} />}
@@ -152,7 +152,7 @@ export function TriageReview({
               </button>
 
               {isOpen && (
-                <div className="border-t border-white/[0.06]">
+                <div className="max-h-[60vh] overflow-y-auto border-t border-white/[0.06]">
                   {!loaded[status] && (
                     <div className="px-4 py-4 text-sm text-white/40">Loading…</div>
                   )}
