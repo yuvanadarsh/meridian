@@ -24,10 +24,10 @@ interface TriageReviewProps {
 }
 
 /**
- * Reviews the sweep's triage classification before anything is applied to
- * Gmail. Each category expands to a paginated list; the user can uncheck or
- * recategorize individual emails. Only the changes (overrides) are sent on
- * approval — untouched emails apply with the category Claude assigned.
+ * Full-screen triage review: shows sweep classification results before
+ * anything is applied to Gmail. Categories are expandable with independent
+ * scroll; emails can be individually re-categorized. Only changed decisions
+ * are sent as overrides on approval — the rest apply as classified.
  */
 export function TriageReview({
   accountId,
@@ -103,106 +103,113 @@ export function TriageReview({
   const analyzed = counts.trash + counts.archive + counts.keep
 
   return (
-    <div className="flex flex-col gap-5">
-      <div>
+    <div className="flex h-full flex-col overflow-hidden">
+      {/* Fixed header: account info + action buttons */}
+      <div className="shrink-0 border-b border-white/10 px-6 py-5">
         <div className="text-xl font-semibold">Inbox sweep — {email}</div>
         <div className="mt-1 text-sm text-white/50">
           {analyzed.toLocaleString()} emails analyzed · {counts.trash.toLocaleString()} trash ·{' '}
           {counts.archive.toLocaleString()} archive · {counts.keep.toLocaleString()} keep
         </div>
+        <div className="mt-4 flex flex-wrap gap-3">
+          <button
+            type="button"
+            onClick={() => void downloadReport()}
+            className="flex items-center gap-2 rounded-full border border-white/10 px-3 py-1.5 text-xs text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+          >
+            <FiDownload size={14} /> Download Report
+          </button>
+          <button
+            type="button"
+            onClick={onDiscard}
+            className="flex items-center gap-2 rounded-full border border-rose-400/20 px-3 py-1.5 text-xs text-rose-300/80 transition-colors hover:bg-rose-400/10"
+          >
+            <FiTrash2 size={14} /> Discard Sweep
+          </button>
+        </div>
       </div>
 
-      <div className="flex flex-wrap gap-3">
-        <button
-          type="button"
-          onClick={() => void downloadReport()}
-          className="flex items-center gap-2 rounded-full border border-white/10 px-3 py-1.5 text-xs text-white/70 transition-colors hover:bg-white/10 hover:text-white"
-        >
-          <FiDownload size={14} /> Download Report
-        </button>
-        <button
-          type="button"
-          onClick={onDiscard}
-          className="flex items-center gap-2 rounded-full border border-rose-400/20 px-3 py-1.5 text-xs text-rose-300/80 transition-colors hover:bg-rose-400/10"
-        >
-          <FiTrash2 size={14} /> Discard Sweep
-        </button>
-      </div>
-
-      <div className="flex flex-col gap-2">
-        {CATEGORIES.map(({ status, title, note }) => {
-          const isOpen = expanded === status
-          const rows = emails[status]
-          return (
-            <div
-              key={status}
-              className="rounded-xl border border-white/10 bg-white/[0.03]"
-            >
-              <button
-                type="button"
-                onClick={() => setExpanded(isOpen ? null : status)}
-                className="sticky top-0 z-10 flex w-full items-center justify-between rounded-xl bg-[#0f1117]/95 px-4 py-3 text-left backdrop-blur-sm transition-colors hover:bg-white/[0.06]"
+      {/* Scrollable category list */}
+      <div className="flex-1 overflow-y-auto px-6 py-5">
+        <div className="flex flex-col gap-2">
+          {CATEGORIES.map(({ status, title, note }) => {
+            const isOpen = expanded === status
+            const rows = emails[status]
+            return (
+              <div
+                key={status}
+                className="rounded-xl border border-white/10 bg-white/[0.03]"
               >
-                <div className="flex items-center gap-2">
-                  {isOpen ? <FiChevronDown size={16} /> : <FiChevronRight size={16} />}
-                  <span className="font-medium capitalize">{title}</span>
-                  <span className="text-sm text-white/40">{counts[status].toLocaleString()}</span>
-                </div>
-                <span className="text-xs text-white/40">{note}</span>
-              </button>
+                {/* Sticky category header — stays at top of the scroll area */}
+                <button
+                  type="button"
+                  onClick={() => setExpanded(isOpen ? null : status)}
+                  className="sticky top-0 z-10 flex w-full items-center justify-between rounded-xl bg-[#0f1117]/95 px-4 py-3 text-left backdrop-blur-sm transition-colors hover:bg-white/[0.06]"
+                >
+                  <div className="flex items-center gap-2">
+                    {isOpen ? <FiChevronDown size={16} /> : <FiChevronRight size={16} />}
+                    <span className="font-medium capitalize">{title}</span>
+                    <span className="text-sm text-white/40">{counts[status].toLocaleString()}</span>
+                  </div>
+                  <span className="text-xs text-white/40">{note}</span>
+                </button>
 
-              {isOpen && (
-                <div className="max-h-[60vh] overflow-y-auto border-t border-white/[0.06]">
-                  {!loaded[status] && (
-                    <div className="px-4 py-4 text-sm text-white/40">Loading…</div>
-                  )}
-                  {loaded[status] && rows.length === 0 && (
-                    <div className="px-4 py-4 text-sm text-white/40">Nothing here.</div>
-                  )}
-                  <ul className="divide-y divide-white/[0.04]">
-                    {rows.map((item) => (
-                      <TriageRow
-                        key={item.id}
-                        item={item}
-                        category={status}
-                        decision={decisions[item.id] ?? status}
-                        open={openEmailId === item.id}
-                        onToggleOpen={() =>
-                          setOpenEmailId(openEmailId === item.id ? null : item.id)
-                        }
-                        onDecision={(next) => setDecision(item.id, next)}
-                      />
-                    ))}
-                  </ul>
-                  {rows.length < counts[status] && (
-                    <button
-                      type="button"
-                      onClick={() => void loadCategory(status, rows.length)}
-                      className="w-full px-4 py-3 text-sm text-white/50 transition-colors hover:bg-white/[0.04] hover:text-white/80"
-                    >
-                      Load more ({(counts[status] - rows.length).toLocaleString()} remaining)
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-          )
-        })}
+                {isOpen && (
+                  <div className="max-h-[60vh] overflow-y-auto border-t border-white/[0.06]">
+                    {!loaded[status] && (
+                      <div className="px-4 py-4 text-sm text-white/40">Loading…</div>
+                    )}
+                    {loaded[status] && rows.length === 0 && (
+                      <div className="px-4 py-4 text-sm text-white/40">Nothing here.</div>
+                    )}
+                    <ul className="divide-y divide-white/[0.04]">
+                      {rows.map((item) => (
+                        <TriageRow
+                          key={item.id}
+                          item={item}
+                          category={status}
+                          decision={decisions[item.id] ?? status}
+                          open={openEmailId === item.id}
+                          onToggleOpen={() =>
+                            setOpenEmailId(openEmailId === item.id ? null : item.id)
+                          }
+                          onDecision={(next) => setDecision(item.id, next)}
+                        />
+                      ))}
+                    </ul>
+                    {rows.length < counts[status] && (
+                      <button
+                        type="button"
+                        onClick={() => void loadCategory(status, rows.length)}
+                        className="w-full px-4 py-3 text-sm text-white/50 transition-colors hover:bg-white/[0.04] hover:text-white/80"
+                      >
+                        Load more ({(counts[status] - rows.length).toLocaleString()} remaining)
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
       </div>
 
-      <div className="flex items-center gap-3">
-        <button
-          type="button"
-          onClick={() => onApply(overrides())}
-          disabled={applying}
-          className="rounded-full bg-white px-5 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-50"
-        >
-          {applying ? 'Applying…' : 'Apply & build memory'}
-        </button>
-        <span className="text-xs text-white/40">
-          Trashes {counts.trash.toLocaleString()}, archives {counts.archive.toLocaleString()} in
-          Gmail.
-        </span>
+      {/* Fixed footer: apply button */}
+      <div className="shrink-0 border-t border-white/10 px-6 py-5">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => onApply(overrides())}
+            disabled={applying}
+            className="rounded-full bg-white px-5 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-50"
+          >
+            {applying ? 'Applying…' : 'Apply & build memory'}
+          </button>
+          <span className="text-xs text-white/40">
+            Trashes {counts.trash.toLocaleString()}, archives {counts.archive.toLocaleString()} in
+            Gmail.
+          </span>
+        </div>
       </div>
     </div>
   )

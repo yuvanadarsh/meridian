@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { motion } from 'framer-motion'
+import { AnimatePresence, motion } from 'framer-motion'
 import { FiArrowRight, FiCheck, FiLoader } from 'react-icons/fi'
 
 import { api } from '../../api/client'
@@ -163,12 +163,13 @@ export function Onboarding({ accountId, onClose }: OnboardingProps) {
   const email = account?.email ?? 'your account'
 
   return (
+    <>
     <motion.div
       className="fixed inset-0 z-[60] flex items-center justify-center overflow-y-auto bg-[#0a0a0a] bg-[radial-gradient(ellipse_at_center,_#111827_0%,_#0a0a0a_70%)] px-4 py-12 text-white"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
     >
-      <div className={`w-full ${step === 'review' ? 'max-w-2xl' : 'max-w-lg'}`}>
+      <div className="w-full max-w-lg">
         {step === 'options' && (
           <div className="flex flex-col gap-6">
             <div>
@@ -295,17 +296,6 @@ export function Onboarding({ accountId, onClose }: OnboardingProps) {
           </div>
         )}
 
-        {step === 'review' && counts && (
-          <TriageReview
-            accountId={accountId}
-            email={email}
-            counts={counts}
-            applying={applying}
-            onApply={(overrides) => void applyTriage(overrides)}
-            onDiscard={() => void discard()}
-          />
-        )}
-
         {step === 'vectorize' && (
           <div className="flex flex-col gap-6">
             <div>
@@ -386,6 +376,30 @@ export function Onboarding({ accountId, onClose }: OnboardingProps) {
         )}
       </div>
     </motion.div>
+
+    {/* Full-screen triage review slides in over the onboarding background */}
+    <AnimatePresence>
+      {step === 'review' && counts && (
+        <motion.div
+          key="triage-review"
+          className="fixed inset-0 z-[70] flex flex-col bg-[#0a0a0a] bg-[radial-gradient(ellipse_at_center,_#111827_0%,_#0a0a0a_70%)] text-white"
+          initial={{ x: '100%' }}
+          animate={{ x: 0 }}
+          exit={{ x: '100%' }}
+          transition={{ type: 'tween', duration: 0.3, ease: 'easeOut' }}
+        >
+          <TriageReview
+            accountId={accountId}
+            email={email}
+            counts={counts}
+            applying={applying}
+            onApply={(overrides) => void applyTriage(overrides)}
+            onDiscard={() => void discard()}
+          />
+        </motion.div>
+      )}
+    </AnimatePresence>
+    </>
   )
 }
 
