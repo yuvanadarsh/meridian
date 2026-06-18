@@ -261,7 +261,15 @@ async def vectorize_pending_notes(db: AsyncSession) -> int:
     embedded = 0
     for note, embedding in zip(notes, embeddings):
         if len(embedding) != vector_service.EMBED_DIM:
-            logger.error("Note %s embedding dimension mismatch — skipped", note["id"])
+            logger.error(
+                "Note %s embedding dimension mismatch — got %s, expected %s — skipped. "
+                "Ensure EMBED_MODEL outputs %s dims and vector(%s) column match.",
+                note["id"],
+                len(embedding),
+                vector_service.EMBED_DIM,
+                vector_service.EMBED_DIM,
+                vector_service.EMBED_DIM,
+            )
             continue
         await db.execute(
             text(
