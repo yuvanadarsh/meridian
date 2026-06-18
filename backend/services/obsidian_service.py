@@ -233,12 +233,24 @@ async def watch_vault(poll_seconds: int = WATCH_INTERVAL_SECONDS) -> None:
         await asyncio.sleep(poll_seconds)
 
 
+_OBSIDIAN_EMBED_MODEL = "voyage-large-2"
+_OBSIDIAN_EMBED_DIM = 1024
+
+
+async def _embed_texts_for_obsidian(texts: list[str]) -> list[list[float]]:
+    """Embed texts with the model hardcoded — no shared constant — to guarantee 1024 dims."""
+    import voyageai
+    client = voyageai.Client(api_key=settings.voyage_api_key)
+    result = await asyncio.to_thread(client.embed, texts, _OBSIDIAN_EMBED_MODEL)
+    return result.embeddings
+
+
 async def vectorize_pending_notes(db: AsyncSession) -> int:
     """Embed up to one batch of not-yet-vectorized notes via VoyageAI."""
     if not settings.voyage_api_key:
         return 0
-    # Imported here to keep this module importable without the embeddings stack.
-    from services import vector_service
+    # to_pgvector is a pure formatting helper — no embedding logic shared.
+    from services.vector_service import to_pgvector
 
     result = await db.execute(
         text(
@@ -253,22 +265,20 @@ async def vectorize_pending_notes(db: AsyncSession) -> int:
 
     texts = [f"{note['title'] or ''}\n\n{(note['content'] or '')[:4000]}" for note in notes]
     try:
-        embeddings = await vector_service.embed_texts(texts)
+        embeddings = await _embed_texts_for_obsidian(texts)
     except Exception:  # noqa: BLE001
         logger.exception("VoyageAI embedding failed for Obsidian notes")
         return 0
 
     embedded = 0
     for note, embedding in zip(notes, embeddings):
-        if len(embedding) != vector_service.EMBED_DIM:
+        if len(embedding) != _OBSIDIAN_EMBED_DIM:
             logger.error(
-                "Note %s embedding dimension mismatch — got %s, expected %s — skipped. "
-                "Ensure EMBED_MODEL outputs %s dims and vector(%s) column match.",
+                "Note %s embedding dimension mismatch — got %s, expected %s from %s — skipped.",
                 note["id"],
                 len(embedding),
-                vector_service.EMBED_DIM,
-                vector_service.EMBED_DIM,
-                vector_service.EMBED_DIM,
+                _OBSIDIAN_EMBED_DIM,
+                _OBSIDIAN_EMBED_MODEL,
             )
             continue
         await db.execute(
@@ -276,7 +286,7 @@ async def vectorize_pending_notes(db: AsyncSession) -> int:
                 "UPDATE obsidian_notes SET embedding = CAST(:embedding AS vector), "
                 "is_vectorized = TRUE WHERE id = :id"
             ),
-            {"embedding": vector_service.to_pgvector(embedding), "id": note["id"]},
+            {"embedding": to_pgvector(embedding), "id": note["id"]},
         )
         embedded += 1
     await db.commit()
@@ -312,10 +322,10 @@ async def get_obsidian_context(query: str, db: AsyncSession, limit: int = 3) -> 
     """
     if not settings.voyage_api_key:
         return ""
-    from services import vector_service
+    from services.vector_service import to_pgvector
 
     try:
-        query_embedding = (await vector_service.embed_texts([query]))[0]
+        query_embedding = (await _embed_texts_for_obsidian([query]))[0]
     except Exception:  # noqa: BLE001
         logger.exception("Failed to embed chat query for Obsidian retrieval")
         return ""
@@ -331,7 +341,7 @@ async def get_obsidian_context(query: str, db: AsyncSession, limit: int = 3) -> 
             LIMIT :limit
             """
         ),
-        {"embedding": vector_service.to_pgvector(query_embedding), "limit": limit},
+        {"embedding": to_pgvector(query_embedding), "limit": limit},
     )
     notes = result.mappings().all()
     if not notes:
