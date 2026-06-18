@@ -16,6 +16,8 @@ type Step = 'options' | 'progress' | 'review' | 'vectorize' | 'done'
 
 interface OnboardingProps {
   accountId: number
+  /** If true, skip the sweep steps and jump straight to reviewing existing triage results. */
+  startAtReview?: boolean
   onClose: () => void
 }
 
@@ -24,7 +26,7 @@ interface OnboardingProps {
  * live progress. Triage review and vectorization extend this flow in later
  * steps; the sweep itself is resumable, so closing and reopening is safe.
  */
-export function Onboarding({ accountId, onClose }: OnboardingProps) {
+export function Onboarding({ accountId, startAtReview = false, onClose }: OnboardingProps) {
   const [account, setAccount] = useState<GmailAccount | null>(null)
   const [estimate, setEstimate] = useState<number | null>(null)
   const [step, setStep] = useState<Step>('options')
@@ -57,6 +59,26 @@ export function Onboarding({ accountId, onClose }: OnboardingProps) {
       cancelled = true
     }
   }, [accountId])
+
+  // When opened from the Connections panel, skip the sweep flow and load saved results.
+  useEffect(() => {
+    if (!startAtReview) return
+    let cancelled = false
+    api
+      .getTriageResults(accountId)
+      .then((results) => {
+        if (!cancelled) {
+          setCounts(results.counts)
+          setStep('review')
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setError('Could not load triage results.')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [accountId, startAtReview])
 
   // Poll sweep progress every 2s while the sweep is running.
   useEffect(() => {

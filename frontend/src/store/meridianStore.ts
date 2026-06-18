@@ -29,6 +29,8 @@ interface MeridianStore {
   justConnectedEmail: string | null
   /** Account currently being onboarded (sweep → triage → vectorize), if any. */
   onboardingAccountId: number | null
+  /** Account whose completed triage results are being reviewed from the Connections panel. */
+  triageReviewAccountId: number | null
 
   setOrbState: (state: OrbState) => void
   addMessage: (msg: ChatMessage) => void
@@ -40,6 +42,7 @@ interface MeridianStore {
   setActivePanel: (panel: ActivePanel) => void
   setJustConnectedEmail: (email: string | null) => void
   setOnboardingAccountId: (id: number | null) => void
+  setTriageReviewAccountId: (id: number | null) => void
 }
 
 export const useMeridianStore = create<MeridianStore>((set) => ({
@@ -51,6 +54,7 @@ export const useMeridianStore = create<MeridianStore>((set) => ({
   activePanel: null,
   justConnectedEmail: null,
   onboardingAccountId: null,
+  triageReviewAccountId: null,
 
   setOrbState: (orbState) => set({ orbState }),
   addMessage: (msg) => set((state) => ({ messages: [...state.messages, msg] })),
@@ -61,4 +65,5 @@ export const useMeridianStore = create<MeridianStore>((set) => ({
   setActivePanel: (activePanel) => set({ activePanel }),
   setJustConnectedEmail: (justConnectedEmail) => set({ justConnectedEmail }),
   setOnboardingAccountId: (onboardingAccountId) => set({ onboardingAccountId }),
+  setTriageReviewAccountId: (triageReviewAccountId) => set({ triageReviewAccountId }),
 }))

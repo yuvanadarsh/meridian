@@ -24,6 +24,7 @@ function relativeTime(iso: string | null): string | null {
  */
 export function ConnectionsPanel() {
   const setOnboardingAccountId = useMeridianStore((state) => state.setOnboardingAccountId)
+  const setTriageReviewAccountId = useMeridianStore((state) => state.setTriageReviewAccountId)
   const setMenuOpen = useMeridianStore((state) => state.setMenuOpen)
   const setActivePanel = useMeridianStore((state) => state.setActivePanel)
 
@@ -91,8 +92,13 @@ export function ConnectionsPanel() {
   }
 
   const sweep = (accountId: number) => {
-    // Launch onboarding for this account and get out of the menu's way.
     setOnboardingAccountId(accountId)
+    setActivePanel(null)
+    setMenuOpen(false)
+  }
+
+  const reviewTriage = (accountId: number) => {
+    setTriageReviewAccountId(accountId)
     setActivePanel(null)
     setMenuOpen(false)
   }
@@ -165,6 +171,15 @@ export function ConnectionsPanel() {
               </div>
 
               <div className="flex shrink-0 items-center gap-2">
+                {account.sweep_status === 'triage_complete' && (
+                  <button
+                    type="button"
+                    onClick={() => reviewTriage(account.id)}
+                    className="rounded-full border border-amber-400/25 px-3 py-1 text-xs text-amber-300/80 transition-colors hover:bg-amber-400/10 hover:text-amber-200"
+                  >
+                    Review triage
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => sweep(account.id)}

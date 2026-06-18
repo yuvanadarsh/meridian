@@ -36,6 +36,7 @@ export interface GmailAccount {
   email: string
   label: string | null
   last_synced_at: string | null
+  sweep_status: string // idle | running | classifying | triage_complete | completed | error
 }
 
 export interface ChatResponse {

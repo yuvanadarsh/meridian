@@ -307,7 +307,7 @@ async def discard_sweep(account_id: int, db: AsyncSession) -> dict:
             """
             UPDATE sweep_progress
             SET status = 'idle', total_estimated = 0, fetched = 0, stored = 0,
-                skipped = 0, error = NULL, updated_at = NOW()
+                skipped = 0, error = NULL, sweep_completed_at = NULL, updated_at = NOW()
             WHERE account_id = :account_id
             """
         ),
@@ -390,6 +390,14 @@ async def apply_triage(
     await db.execute(
         text(
             "DELETE FROM emails WHERE account_id = :account_id AND triage_status = 'trash'"
+        ),
+        {"account_id": account_id},
+    )
+    # Mark the sweep as fully applied so the "Review triage" button is removed.
+    await db.execute(
+        text(
+            "UPDATE sweep_progress SET status = 'completed', sweep_completed_at = NULL, "
+            "updated_at = NOW() WHERE account_id = :account_id"
         ),
         {"account_id": account_id},
     )
