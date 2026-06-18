@@ -1,6 +1,5 @@
 """Chat routes: Claude conversation with calendar context and token tracking."""
 
-import asyncio
 import logging
 from datetime import date
 
@@ -162,7 +161,7 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
 
     # Mirror the exchange into the Obsidian daily note (best-effort, no vault → no-op).
     try:
-        await asyncio.to_thread(obsidian_service.append_exchange, payload.message, reply)
+        await obsidian_service.append_exchange(payload.message, reply)
     except Exception:  # noqa: BLE001 — never fail a chat over a note write
         logger.exception("Obsidian daily-note append failed")
 

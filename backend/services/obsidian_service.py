@@ -9,11 +9,13 @@ Vault ingestion and RAG retrieval build on this module in later steps.
 """
 
 import asyncio
+import json
 import logging
 import re
 from datetime import datetime
 from pathlib import Path
 
+import anthropic
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,20 +39,18 @@ SECTIONS = (
     "## Related",
 )
 
-# Capitalized words that are almost never entities worth linking.
-_WIKILINK_STOPWORDS = {
-    "you", "your", "yours", "meridian", "the", "a", "an", "i", "it", "we",
-    "they", "he", "she", "this", "that", "these", "those", "here", "there",
-    "today", "tomorrow", "yesterday", "ok", "okay", "yes", "no", "sure",
-    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
-    "january", "february", "march", "april", "may", "june", "july", "august",
-    "september", "october", "november", "december", "am", "pm", "let", "let's",
-    "if", "so", "and", "but", "or", "to", "of", "in", "on", "at", "for",
-}
-
-_CAPITALIZED_PHRASE = re.compile(r"\b([A-Z][a-zA-Z0-9]+(?:\s+[A-Z][a-zA-Z0-9]+)*)\b")
 _WIKILINK = re.compile(r"\[\[([^\]]+)\]\]")
 _HEADING = re.compile(r"^#\s+(.+)$", re.MULTILINE)
+
+# Cache: hash(text) → extracted entity list so identical text isn't re-sent to Claude.
+_wikilink_cache: dict[int, list[str]] = {}
+
+_ENTITY_EXTRACTION_PROMPT = """\
+Extract named entities from this text that would make meaningful Obsidian wikilinks.
+Only include: proper nouns, project names, organization names, product names, place names, and people's names.
+Do not include: common words, verbs, adjectives, pronouns, or single generic nouns.
+Return a JSON array of strings only, no other text.
+Text: {text}"""
 
 
 def vault_path() -> Path | None:
@@ -70,30 +70,36 @@ def _format_time(when: datetime) -> str:
     return f"{hour}:{when.minute:02d} {meridiem}"
 
 
-def extract_wikilinks(text: str) -> list[str]:
-    """Heuristically pull proper-noun phrases to link in the Related section.
+async def extract_wikilinks(text: str) -> list[str]:
+    """Use Claude Haiku to extract meaningful named-entity wikilinks from text.
 
-    Favors multi-word capitalized phrases and longer single TitleCase words;
-    filters common sentence-initial words. Imperfect by design — over many
-    conversations the graph fills in.
+    Results are cached by text hash so repeated calls within a vault watch cycle
+    don't re-hit the API. Returns an empty list on any API failure so daily-note
+    writing still succeeds.
     """
-    links: list[str] = []
-    for phrase in _CAPITALIZED_PHRASE.findall(text):
-        words = phrase.split()
-        # Trim common opener/closer words ("Your MIT" → "MIT").
-        while words and words[0].lower() in _WIKILINK_STOPWORDS:
-            words.pop(0)
-        while words and words[-1].lower() in _WIKILINK_STOPWORDS:
-            words.pop()
-        if not words:
-            continue
-        cleaned = " ".join(words)
-        # Drop lone 1–2 char fragments; keep acronyms like MIT and any phrase.
-        if len(words) == 1 and (len(cleaned) < 3 or cleaned.lower() in _WIKILINK_STOPWORDS):
-            continue
-        if cleaned not in links:
-            links.append(cleaned)
-    return links[:8]
+    cache_key = hash(text)
+    if cache_key in _wikilink_cache:
+        return _wikilink_cache[cache_key]
+
+    try:
+        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        message = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=256,
+            messages=[{
+                "role": "user",
+                "content": _ENTITY_EXTRACTION_PROMPT.format(text=text),
+            }],
+        )
+        raw = message.content[0].text.strip()
+        parsed = json.loads(raw)
+        links = [str(item) for item in parsed if isinstance(item, str)][:8]
+    except Exception:
+        logger.exception("Claude Haiku wikilink extraction failed — returning no links")
+        links = []
+
+    _wikilink_cache[cache_key] = links
+    return links
 
 
 def _new_note(when: datetime) -> str:
@@ -126,7 +132,7 @@ def _merge_related(content: str, new_links: list[str]) -> str:
     return _insert_into_section(content, "## Related", block)
 
 
-def append_exchange(
+async def append_exchange(
     user_message: str, assistant_message: str, when: datetime | None = None
 ) -> bool:
     """Append one conversation exchange to today's daily note.
@@ -140,27 +146,30 @@ def append_exchange(
         return False
 
     when = when or datetime.now()
-    try:
-        daily_dir = vault / "Daily"
-        daily_dir.mkdir(parents=True, exist_ok=True)
-        note_path = daily_dir / f"{when.strftime('%Y-%m-%d')}.md"
+    links = await extract_wikilinks(assistant_message)
 
-        content = (
-            note_path.read_text(encoding="utf-8") if note_path.exists() else _new_note(when)
-        )
-        block = (
-            f"\n### {_format_time(when)}\n"
-            f"**You:** {user_message.strip()}\n\n"
-            f"**Meridian:** {assistant_message.strip()}\n"
-        )
-        content = _insert_into_section(content, SECTIONS[0], block)
-        content = _merge_related(content, extract_wikilinks(assistant_message))
+    def _write() -> bool:
+        try:
+            daily_dir = vault / "Daily"
+            daily_dir.mkdir(parents=True, exist_ok=True)
+            note_path = daily_dir / f"{when.strftime('%Y-%m-%d')}.md"
+            content = (
+                note_path.read_text(encoding="utf-8") if note_path.exists() else _new_note(when)
+            )
+            block = (
+                f"\n### {_format_time(when)}\n"
+                f"**You:** {user_message.strip()}\n\n"
+                f"**Meridian:** {assistant_message.strip()}\n"
+            )
+            content = _insert_into_section(content, SECTIONS[0], block)
+            content = _merge_related(content, links)
+            note_path.write_text(content, encoding="utf-8")
+            return True
+        except OSError:
+            logger.exception("Failed to write Obsidian daily note")
+            return False
 
-        note_path.write_text(content, encoding="utf-8")
-        return True
-    except OSError:
-        logger.exception("Failed to write Obsidian daily note")
-        return False
+    return await asyncio.to_thread(_write)
 
 
 # ---------------------------------------------------------------------------
