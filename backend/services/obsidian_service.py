@@ -216,6 +216,31 @@ async def ingest_note(md_file: Path, db: AsyncSession) -> None:
     await db.commit()
 
 
+async def scan_vault_on_startup() -> None:
+    """Ingest all existing vault notes that aren't yet in the database.
+
+    Runs once at startup before the watcher loop begins so notes that existed
+    before Meridian was first launched (e.g. Welcome.md) are immediately
+    available for RAG retrieval without waiting for a file-system event.
+    """
+    vault = vault_path()
+    if vault is None:
+        return
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(text("SELECT file_path FROM obsidian_notes"))
+        existing = {row[0] for row in result.fetchall()}
+
+    ingested = 0
+    for md_file in vault.rglob("*.md"):
+        if str(md_file) not in existing:
+            async with AsyncSessionLocal() as db:
+                await ingest_note(md_file, db)
+            ingested += 1
+
+    logger.info("Startup vault scan complete — ingested %s new note(s)", ingested)
+
+
 async def watch_vault(poll_seconds: int = WATCH_INTERVAL_SECONDS) -> None:
     """Poll the vault for new/modified .md files and ingest them (runs forever)."""
     vault = vault_path()
