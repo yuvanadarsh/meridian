@@ -49,6 +49,16 @@ export function ChatModal({
     return () => window.clearTimeout(id)
   }, [open])
 
+  // Close on Escape.
+  useEffect(() => {
+    if (!open) return
+    const handler = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [open, onClose])
+
   const resize = () => {
     const el = textareaRef.current
     if (!el) return
