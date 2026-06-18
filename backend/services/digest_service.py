@@ -7,7 +7,7 @@ failure so a single flaky source never sinks the whole brief. The assembled
 
 import asyncio
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -146,7 +146,7 @@ async def get_digest_calendar(db: AsyncSession) -> str:
 async def get_digest_emails(db: AsyncSession) -> str:
     """Summarize the last 24h of keep-status (action-needed) emails."""
     # Compute the cutoff in Python — asyncpg rejects ::timestamp casts on bound params.
-    since = datetime.now(timezone.utc) - timedelta(hours=24)
+    since = datetime.utcnow() - timedelta(hours=24)
     result = await db.execute(
         text(
             """

@@ -209,9 +209,7 @@ _EVENT_COLUMNS = (
 
 async def get_today(account_id: int, db: AsyncSession) -> list[dict]:
     """Return today's events (UTC day) sorted by start time."""
-    start = datetime.now(timezone.utc).replace(
-        hour=0, minute=0, second=0, microsecond=0, tzinfo=None
-    )
+    start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     end = start + timedelta(days=1)
     result = await db.execute(
         text(
@@ -230,7 +228,7 @@ async def get_today(account_id: int, db: AsyncSession) -> list[dict]:
 
 async def get_upcoming(account_id: int, db: AsyncSession, days: int = 7) -> list[dict]:
     """Return events from now through the next ``days`` days, sorted by start time."""
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = datetime.utcnow()
     end = now + timedelta(days=days)
     result = await db.execute(
         text(
