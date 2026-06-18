@@ -92,8 +92,12 @@ async def extract_wikilinks(text: str) -> list[str]:
             }],
         )
         raw = message.content[0].text.strip()
+        # Strip markdown code fences Haiku sometimes adds around JSON output.
+        raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        if not raw or raw == "[]":
+            return []
         parsed = json.loads(raw)
-        links = [str(item) for item in parsed if isinstance(item, str)][:8]
+        links = [str(item) for item in parsed if isinstance(item, str) and len(item) > 2][:8]
     except Exception:
         logger.exception("Claude Haiku wikilink extraction failed — returning no links")
         links = []
