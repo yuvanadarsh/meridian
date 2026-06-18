@@ -198,6 +198,40 @@ async def load_credentials(db: AsyncSession, account_id: int) -> Credentials:
     return creds
 
 
+async def send_email(
+    db: AsyncSession,
+    account_id: int,
+    to_email: str,
+    subject: str,
+    body: str,
+    thread_id: str | None = None,
+) -> dict:
+    """Send a plain-text email from an account via the Gmail API.
+
+    When ``thread_id`` is provided the message is attached to that Gmail thread
+    so replies stay threaded. Returns the Gmail API send result.
+    """
+    from email.mime.text import MIMEText
+
+    creds = await load_credentials(db, account_id)
+    service = await asyncio.to_thread(
+        lambda: build("gmail", "v1", credentials=creds, cache_discovery=False)
+    )
+
+    message = MIMEText(body)
+    message["to"] = to_email
+    message["subject"] = subject
+    raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
+
+    send_body: dict = {"raw": raw}
+    if thread_id:
+        send_body["threadId"] = thread_id
+
+    return await asyncio.to_thread(
+        lambda: service.users().messages().send(userId="me", body=send_body).execute()
+    )
+
+
 # ---------------------------------------------------------------------------
 # Email sweep
 # ---------------------------------------------------------------------------
