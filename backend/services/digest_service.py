@@ -246,6 +246,54 @@ async def _assemble_full_text(
         )
 
 
+async def get_cached_digest(db: AsyncSession) -> dict | None:
+    """Return today's cached digest if one exists, else None."""
+    result = await db.execute(
+        text("SELECT * FROM digest_cache WHERE cache_date = CURRENT_DATE")
+    )
+    row = result.mappings().first()
+    if not row:
+        return None
+    return {
+        "calendar": row["calendar"],
+        "emails": row["emails"],
+        "news": row["news"],
+        "stocks": row["stocks"],
+        "full_text": row["full_text"],
+        "cached": True,
+        "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+    }
+
+
+async def save_digest_cache(db: AsyncSession, digest: dict) -> None:
+    """Upsert today's digest result into the cache table."""
+    await db.execute(
+        text(
+            """
+            INSERT INTO digest_cache
+                (cache_date, calendar, emails, news, stocks, full_text, updated_at)
+            VALUES
+                (CURRENT_DATE, :calendar, :emails, :news, :stocks, :full_text, NOW())
+            ON CONFLICT (cache_date) DO UPDATE SET
+                calendar   = EXCLUDED.calendar,
+                emails     = EXCLUDED.emails,
+                news       = EXCLUDED.news,
+                stocks     = EXCLUDED.stocks,
+                full_text  = EXCLUDED.full_text,
+                updated_at = NOW()
+            """
+        ),
+        {
+            "calendar": digest["calendar"],
+            "emails":   digest["emails"],
+            "news":     digest["news"],
+            "stocks":   digest["stocks"],
+            "full_text": digest["full_text"],
+        },
+    )
+    await db.commit()
+
+
 async def build_digest(db: AsyncSession) -> dict:
     """Assemble the full daily digest.
 

@@ -118,6 +118,8 @@ export interface Digest {
   news: string
   stocks: string
   full_text: string
+  cached: boolean
+  updated_at: string | null
 }
 
 export const api = {
@@ -201,6 +203,7 @@ export const api = {
 
   // Digest
   getDigest: () => request<Digest>('/digest/today'),
+  refreshDigest: () => request<Digest>('/digest/refresh', { method: 'POST' }),
 
   // Settings
   getSettings: () => request<Record<string, string>>('/settings'),

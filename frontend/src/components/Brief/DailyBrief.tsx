@@ -35,41 +35,68 @@ const TODAY_LABEL = new Date().toLocaleDateString('en-US', {
   year: 'numeric',
 })
 
+function timeAgo(iso: string): string {
+  const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
+  if (diff < 60) return 'just now'
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
+  return `${Math.floor(diff / 3600)}h ago`
+}
+
 /**
- * Daily brief: calendar, email, news, and stock watchlist for today. Fetches
- * the assembled digest from the backend, with Refresh and Read-aloud controls.
+ * Daily brief: calendar, email, news, and stock watchlist for today.
+ *
+ * On open, calls GET /digest/today which returns the cached result instantly
+ * when one exists (free, no API calls). The Refresh button calls
+ * POST /digest/refresh to force a rebuild — spinner shows only on the button,
+ * not on the whole panel, so existing content stays visible.
  */
 export function DailyBrief() {
   const [digest, setDigest] = useState<Digest | null>(null)
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const load = () => {
-    setLoading(true)
-    setError(null)
+  useEffect(() => {
+    let active = true
     api
       .getDigest()
+      .then((d) => { if (active) setDigest(d) })
+      .catch((err: Error) => { if (active) setError(err.message) })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [])
+
+  const handleRefresh = () => {
+    setRefreshing(true)
+    setError(null)
+    api
+      .refreshDigest()
       .then(setDigest)
       .catch((err: Error) => setError(err.message))
-      .finally(() => setLoading(false))
+      .finally(() => setRefreshing(false))
   }
-
-  useEffect(load, [])
 
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium text-white/80">
-          Today's Brief — {TODAY_LABEL}
-        </h3>
+        <div>
+          <h3 className="text-sm font-medium text-white/80">
+            Today's Brief — {TODAY_LABEL}
+          </h3>
+          {digest?.cached && digest.updated_at && (
+            <p className="mt-0.5 text-xs text-white/30">
+              Last updated {timeAgo(digest.updated_at)}
+            </p>
+          )}
+        </div>
         <button
           type="button"
-          onClick={load}
-          disabled={loading}
+          onClick={handleRefresh}
+          disabled={loading || refreshing}
           aria-label="Refresh brief"
           className="flex h-8 w-8 items-center justify-center rounded-full text-white/50 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-40"
         >
-          <FiRefreshCw size={16} className={loading ? 'animate-spin' : undefined} />
+          <FiRefreshCw size={16} className={refreshing ? 'animate-spin' : undefined} />
         </button>
       </div>
 
@@ -77,7 +104,7 @@ export function DailyBrief() {
         <p className="py-6 text-center text-sm text-white/40">Gathering your brief…</p>
       )}
 
-      {error && !loading && (
+      {error && (
         <p className="py-6 text-center text-sm text-red-400/80">{error}</p>
       )}
 
