@@ -20,7 +20,7 @@ Meridian is a local personal AI OS. It manages multiple Gmail accounts and Googl
 - **FastAPI** (Python 3.11+) — central API server, runs in Docker
 - **PostgreSQL** (local install, not containerized) — all structured data + embeddings via pgvector
 - **pgvector** — vector similarity search on email/note embeddings
-- **VoyageAI** — email and note embeddings (`voyage-large-2`, 1024 dimensions)
+- **VoyageAI** — email and note embeddings (`voyage-3-lite`, 512 dimensions)
 - **Claude API** (`claude-sonnet-4-6`) — reasoning, drafting, triage classification
 - **ElevenLabs API** — TTS for voice responses
 - **Google APIs** — Gmail + Google Calendar (OAuth 2.0, multiple accounts)
@@ -187,7 +187,7 @@ CREATE TABLE IF NOT EXISTS emails (
     received_at TIMESTAMP,
     triage_status VARCHAR(20) DEFAULT 'pending',  -- 'keep', 'archive', 'trash', 'pending'
     is_vectorized BOOLEAN DEFAULT FALSE,
-    embedding vector(1024),
+    embedding vector(512),
     created_at TIMESTAMP DEFAULT NOW()
 );
 
@@ -232,7 +232,7 @@ CREATE TABLE IF NOT EXISTS contacts (
     display_name VARCHAR(255),
     email_count INTEGER DEFAULT 0,
     last_contacted TIMESTAMP,
-    embedding vector(1024),
+    embedding vector(512),
     created_at TIMESTAMP DEFAULT NOW()
 );
 ```

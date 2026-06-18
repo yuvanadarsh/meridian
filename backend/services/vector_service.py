@@ -2,7 +2,7 @@
 
 Only ``keep`` and ``archive`` emails are embedded — ``trash`` is never
 vectorized (it's deleted on approval) and ``unreadable`` is skipped. The
-embedding model and dimension are fixed to match the ``vector(1024)`` columns.
+embedding model and dimension are fixed to match the ``vector(512)`` columns.
 """
 
 import asyncio
@@ -18,11 +18,11 @@ from db.database import AsyncSessionLocal
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-# Project standard (CLAUDE.md): voyage-large-2 at 1024 dims, matching the
-# vector(1024) columns. If a future model changes the dimension, update both
+# Project standard (CLAUDE.md): voyage-3-lite at 512 dims, matching the
+# vector(512) columns. If a future model changes the dimension, update both
 # this constant and the schema together.
-EMBED_MODEL = "voyage-large-2"
-EMBED_DIM = 1024
+EMBED_MODEL = "voyage-3-lite"
+EMBED_DIM = 512
 EMBED_BATCH_SIZE = 128
 
 _client: voyageai.Client | None = None

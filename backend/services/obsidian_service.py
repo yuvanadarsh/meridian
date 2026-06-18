@@ -233,12 +233,12 @@ async def watch_vault(poll_seconds: int = WATCH_INTERVAL_SECONDS) -> None:
         await asyncio.sleep(poll_seconds)
 
 
-_OBSIDIAN_EMBED_MODEL = "voyage-large-2"
-_OBSIDIAN_EMBED_DIM = 1024
+_OBSIDIAN_EMBED_MODEL = "voyage-3-lite"
+_OBSIDIAN_EMBED_DIM = 512
 
 
 async def _embed_texts_for_obsidian(texts: list[str]) -> list[list[float]]:
-    """Embed texts with the model hardcoded — no shared constant — to guarantee 1024 dims."""
+    """Embed texts with the model hardcoded — no shared constant — to guarantee 512 dims."""
     import voyageai
     client = voyageai.Client(api_key=settings.voyage_api_key)
     result = await asyncio.to_thread(client.embed, texts, _OBSIDIAN_EMBED_MODEL)

@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS obsidian_notes (
     title TEXT,
     content TEXT,
     wikilinks TEXT[],            -- extracted [[links]]
-    embedding vector(1024),
+    embedding vector(512),
     last_modified TIMESTAMP,
     is_vectorized BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT NOW()
