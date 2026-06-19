@@ -115,6 +115,7 @@ calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
    # Phase 4
    psql -U your_user -d meridian -f backend/db/migrations/010_email_threads.sql
    psql -U your_user -d meridian -f backend/db/migrations/011_hybrid_search.sql
+   psql -U your_user -d meridian -f backend/db/migrations/011b_threads_fts.sql
    psql -U your_user -d meridian -f backend/db/migrations/012_contacts_graph.sql
    psql -U your_user -d meridian -f backend/db/migrations/013_ai_providers.sql
    psql -U your_user -d meridian -f backend/db/migrations/014_supercharge.sql

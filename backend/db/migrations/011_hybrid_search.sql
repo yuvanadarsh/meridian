@@ -9,9 +9,4 @@ ALTER TABLE emails ADD COLUMN IF NOT EXISTS search_vector tsvector
 
 CREATE INDEX IF NOT EXISTS idx_emails_fts ON emails USING GIN(search_vector);
 
-ALTER TABLE email_threads ADD COLUMN IF NOT EXISTS search_vector tsvector
-    GENERATED ALWAYS AS (
-        to_tsvector('english', coalesce(subject, '') || ' ' || array_to_string(coalesce(participants, '{}'), ' '))
-    ) STORED;
-
-CREATE INDEX IF NOT EXISTS idx_threads_fts ON email_threads USING GIN(search_vector);
+-- email_threads FTS handled in 011b_threads_fts.sql (trigger-based due to array_to_string immutability)
