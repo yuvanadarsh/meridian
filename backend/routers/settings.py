@@ -2,12 +2,12 @@
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.database import get_db
-from services import provider_service, settings_service
+from services import provider_service, settings_service, vector_service
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,12 @@ class ProviderUpdate(BaseModel):
     model_classify: str | None = None
     model_draft: str | None = None
     activate: bool = False
+
+
+class RevectorizeRequest(BaseModel):
+    """Switch the embedding model and re-embed the whole corpus."""
+
+    model: str
 
 
 @router.get("")
@@ -83,3 +89,35 @@ async def delete_provider_key(provider: str, db: AsyncSession = Depends(get_db))
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
     await provider_service.delete_key(db, provider)
     return {"providers": await provider_service.list_providers(db)}
+
+
+@router.get("/embedding-models")
+async def list_embedding_models():
+    """Return the selectable embedding models with their dimensions/providers."""
+    return {
+        "models": [
+            {"model": name, **config}
+            for name, config in vector_service.EMBEDDING_MODELS.items()
+        ]
+    }
+
+
+@router.post("/revectorize")
+async def revectorize(
+    payload: RevectorizeRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    """Switch the embedding model and re-embed all emails, threads, notes, contacts."""
+    try:
+        result = await vector_service.revectorize(payload.model, db)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    background_tasks.add_task(vector_service.run_revectorize_background, payload.model)
+    return result
+
+
+@router.get("/revectorize/progress")
+async def revectorize_progress(db: AsyncSession = Depends(get_db)):
+    """Return ``{total, done, status}`` for the in-flight revectorize."""
+    return await vector_service.revectorize_progress(db)
