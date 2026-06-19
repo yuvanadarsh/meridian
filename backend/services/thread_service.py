@@ -144,14 +144,13 @@ async def build_threads(account_id: int, db: AsyncSession) -> dict:
             )
             thread_db_id = upsert.scalar_one()
 
-            # Step 2: update embedding separately so ::vector cast is unambiguous.
+            # Step 2: interpolate the vector string directly — asyncpg cannot parse
+            # the :param::vector syntax, so we embed the sanitized literal in the SQL.
             if embedding_literal is not None:
+                safe_vec = embedding_literal.replace("'", "")
                 await db.execute(
-                    text(
-                        "UPDATE email_threads SET embedding = :embedding::vector "
-                        "WHERE id = :id"
-                    ),
-                    {"embedding": embedding_literal, "id": thread_db_id},
+                    text(f"UPDATE email_threads SET embedding = '{safe_vec}'::vector WHERE id = :id"),
+                    {"id": thread_db_id},
                 )
 
             # Point every message in this thread at its parent thread row.

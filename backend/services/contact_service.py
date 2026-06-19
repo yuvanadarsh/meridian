@@ -220,15 +220,14 @@ async def build_contact_graph(account_id: int, db: AsyncSession) -> dict:
         )
         await db.commit()
 
-        # Step 2: update embedding separately so the ::vector cast is unambiguous.
+        # Step 2: interpolate the vector string directly — asyncpg cannot parse
+        # the :param::vector syntax, so we embed the sanitized literal in the SQL.
         if embedding is not None and len(embedding) == expected_dim:
             literal = vector_service.to_pgvector(embedding)
+            safe_vec = literal.replace("'", "")
             await db.execute(
-                text(
-                    "UPDATE contacts SET embedding = :embedding::vector "
-                    "WHERE email_address = :email_address"
-                ),
-                {"embedding": literal, "email_address": entry["email_address"]},
+                text(f"UPDATE contacts SET embedding = '{safe_vec}'::vector WHERE email_address = :email_address"),
+                {"email_address": entry["email_address"]},
             )
             await db.commit()
 
