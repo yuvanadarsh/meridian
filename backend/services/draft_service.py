@@ -10,12 +10,9 @@ import logging
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from services import claude_service
+from services import provider_service
 
 logger = logging.getLogger(__name__)
-
-# Quality matters more than cost for drafting — use the project standard model.
-DRAFT_MODEL = claude_service.MODEL
 
 _DRAFT_PROMPT = """\
 You are drafting an email on behalf of the user. Match their writing style exactly based on the examples below.
@@ -113,13 +110,9 @@ async def generate_draft(
         thread_context=thread_context,
     )
 
-    client = claude_service.get_client()
-    message = await client.messages.create(
-        model=DRAFT_MODEL,
-        max_tokens=1024,
-        messages=[{"role": "user", "content": prompt}],
+    body, _ = await provider_service.call_draft(
+        db, system="", messages=[{"role": "user", "content": prompt}], max_tokens=1024
     )
-    body = claude_service.extract_text(message)
 
     result = await db.execute(
         text(

@@ -2,6 +2,7 @@ import { useEffect, useMemo } from 'react'
 import { BsMicFill, BsMicMuteFill } from 'react-icons/bs'
 
 import { api } from './api/client'
+import BriefModal from './components/Brief/BriefModal'
 import ChatInput from './components/Chat/ChatInput'
 import ChatModal from './components/Chat/ChatModal'
 import HamburgerMenu from './components/Menu/HamburgerMenu'
@@ -28,6 +29,8 @@ function App() {
   const messages = useMeridianStore((state) => state.messages)
   const chatOpen = useMeridianStore((state) => state.chatOpen)
   const setChatOpen = useMeridianStore((state) => state.setChatOpen)
+  const briefOpen = useMeridianStore((state) => state.briefOpen)
+  const setBriefOpen = useMeridianStore((state) => state.setBriefOpen)
   const setMessages = useMeridianStore((state) => state.setMessages)
   const justConnectedEmail = useMeridianStore((state) => state.justConnectedEmail)
   const setJustConnectedEmail = useMeridianStore((state) => state.setJustConnectedEmail)
@@ -150,6 +153,8 @@ function App() {
       />
 
       <HamburgerMenu />
+
+      <BriefModal open={briefOpen} onClose={() => setBriefOpen(false)} />
 
       {(onboardingAccountId !== null || triageReviewAccountId !== null) && (
         <Onboarding

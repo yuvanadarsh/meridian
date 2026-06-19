@@ -582,7 +582,7 @@ async def sweep_account(
 
         # Classify + summarize this batch in one Claude call, then persist.
         if triage_enabled and to_classify:
-            results = await triage_service.classify_and_summarize_batch(to_classify)
+            results = await triage_service.classify_and_summarize_batch(to_classify, db)
             for email, result in zip(to_classify, results):
                 await db.execute(
                     text(

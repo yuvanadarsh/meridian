@@ -57,6 +57,10 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:5173"
     api_url: str = "http://localhost:8000"
 
+    # Encryption key for secrets stored in the DB (e.g. provider API keys).
+    # Generate with: openssl rand -hex 32
+    secret_key: str = ""
+
     @property
     def database_url(self) -> str:
         """Async SQLAlchemy connection string using the asyncpg driver.

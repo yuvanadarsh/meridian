@@ -43,6 +43,37 @@ calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
   scheduling), the `?connected=` OAuth param is stripped after sign-in, and chat
   history survives a refresh
 
+## Features (Phase 3 — Intelligence)
+
+- **Email drafting in your voice** — RAG over your own sent mail builds a style
+  profile, then Claude drafts replies that match it; drafts are reviewed in the
+  Drafts panel before anything is sent
+- **Daily brief** — calendar, email, news, and stock watchlist, cached in the
+  database and served instantly on open (refresh forces a rebuild)
+- **Calendar writes** — Claude can create events via an action-token protocol
+- **Settings** — response tone, agent name, digest time, timezone, voice toggle
+
+## Features (Phase 4 — Memory, Intelligence, and Scale)
+
+- **Email threading** — messages are grouped into conversations; chat RAG
+  retrieves whole threads instead of fragmented messages
+- **Hybrid search** — pgvector similarity fused with Postgres full-text (BM25)
+  ranking via Reciprocal Rank Fusion for far better email retrieval
+- **Contact intelligence** — a contact graph built from email history (counts,
+  recency, topics) is injected into chat context and browsable in Connections
+- **Multi-provider AI** — store and toggle Anthropic, OpenAI, Gemini, DeepSeek,
+  and Ollama keys, with per-task (chat / classify / draft) model selection; keys
+  are encrypted at rest
+- **Configurable embeddings** — pick the embedding model in Settings and
+  re-embed all data (columns auto-resize when the dimension changes)
+- **Supercharge import** — upload a Claude / ChatGPT / Gemini conversation export
+  to parse it into your Obsidian vault and vectorize it into memory
+- **Scheduled digest** — pre-builds at your set time in your timezone so the
+  Brief loads instantly in the morning
+- **Brief as a centered modal**, and a **triage mode** setting (aggressive /
+  normal / safe)
+- Fix: draft intent detection no longer triggers on plain email questions
+
 ## Prerequisites
 
 - macOS or Linux
@@ -69,12 +100,26 @@ calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
    psql -U your_user -d meridian -f backend/db/init.sql
    ```
 
-   On an existing database created before Phase 2, apply the migrations instead
-   of (or in addition to) re-running `init.sql`:
+   On an existing database, apply the migrations in order instead of (or in
+   addition to) re-running `init.sql`:
 
    ```bash
    psql -U your_user -d meridian -f backend/db/migrations/002_obsidian_notes.sql
    psql -U your_user -d meridian -f backend/db/migrations/003_email_summary.sql
+   psql -U your_user -d meridian -f backend/db/migrations/004_sweep_completed_at.sql
+   psql -U your_user -d meridian -f backend/db/migrations/005_fix_embedding_dimensions.sql
+   psql -U your_user -d meridian -f backend/db/migrations/006_drafts.sql
+   psql -U your_user -d meridian -f backend/db/migrations/007_settings.sql
+   psql -U your_user -d meridian -f backend/db/migrations/008_add_timezone_setting.sql
+   psql -U your_user -d meridian -f backend/db/migrations/009_digest_cache.sql
+   # Phase 4
+   psql -U your_user -d meridian -f backend/db/migrations/010_email_threads.sql
+   psql -U your_user -d meridian -f backend/db/migrations/011_hybrid_search.sql
+   psql -U your_user -d meridian -f backend/db/migrations/011b_threads_fts.sql
+   psql -U your_user -d meridian -f backend/db/migrations/012_contacts_graph.sql
+   psql -U your_user -d meridian -f backend/db/migrations/013_ai_providers.sql
+   psql -U your_user -d meridian -f backend/db/migrations/014_supercharge.sql
+   psql -U your_user -d meridian -f backend/db/migrations/015_triage_mode.sql
    ```
 
 3. (Optional) Point Meridian at your Obsidian vault for the memory layer by
@@ -123,6 +168,11 @@ See `.env.example` for all required keys:
 - **ElevenLabs** (TTS) — voice responses
 - **VoyageAI** (embeddings) — used from Phase 2
 - **Google OAuth** credentials (from the Google Cloud Console) — Gmail + Calendar
+- **`SECRET_KEY`** — encrypts AI-provider API keys at rest. Generate one with
+  `openssl rand -hex 32` and set it in `.env` before storing any provider key.
+
+Additional AI-provider keys (OpenAI, Gemini, DeepSeek, Ollama) are entered in the
+Settings → AI Providers panel and stored encrypted in the database, not in `.env`.
 
 OAuth tokens are stored in the database after first authentication, never in `.env`.
 
@@ -131,7 +181,11 @@ OAuth tokens are stored in the database after first authentication, never in `.e
 - **Frontend:** React + Vite + TypeScript + Tailwind + Framer Motion
 - **Backend:** FastAPI (Python), async SQLAlchemy
 - **Database:** PostgreSQL + pgvector (runs on the host, not containerized)
-- **AI:** Claude (`claude-sonnet-4-6`) for reasoning, VoyageAI for embeddings, ElevenLabs for TTS
+- **AI:** Claude (`claude-sonnet-4-6`) by default for reasoning, with a pluggable
+  provider layer (OpenAI / Gemini / DeepSeek / Ollama over OpenAI-compatible
+  endpoints); VoyageAI for embeddings (configurable); ElevenLabs for TTS
+- **Retrieval:** thread-aware hybrid search (pgvector + Postgres full-text, fused
+  with Reciprocal Rank Fusion) over emails, plus Obsidian-note RAG
 - **Memory:** an Obsidian vault (set via `OBSIDIAN_VAULT_PATH`) — daily notes are
   written after each exchange, ingested back into pgvector, and retrieved into
   chat context. A background watcher in the FastAPI lifespan polls the vault.

@@ -122,6 +122,52 @@ export interface Digest {
   updated_at: string | null
 }
 
+export interface SuperchargeUpload {
+  import_id: number
+  provider: string
+  total_conversations: number
+}
+
+export interface SuperchargeImport {
+  id: number
+  provider: string
+  filename: string | null
+  total_conversations: number
+  processed_conversations: number
+  status: string
+  created_at: string
+}
+
+export interface AIProvider {
+  provider: string
+  has_key: boolean
+  base_url: string | null
+  is_active: boolean
+  model_chat: string | null
+  model_classify: string | null
+  model_draft: string | null
+}
+
+export interface ProviderPatch {
+  api_key?: string
+  base_url?: string
+  model_chat?: string
+  model_classify?: string
+  model_draft?: string
+  activate?: boolean
+}
+
+export interface Contact {
+  email_address: string
+  display_name: string | null
+  email_count: number
+  sent_count: number
+  received_count: number
+  first_contacted: string | null
+  last_contacted: string | null
+  topics: string[] | null
+}
+
 export const api = {
   baseUrl: API_URL,
   getAccounts: () => request<GmailAccount[]>('/gmail/accounts'),
@@ -205,6 +251,26 @@ export const api = {
   getDigest: () => request<Digest>('/digest/today'),
   refreshDigest: () => request<Digest>('/digest/refresh', { method: 'POST' }),
 
+  // Threads
+  buildThreads: (accountId: number) =>
+    request<{ status: string; account_id: number }>(`/gmail/threads/build/${accountId}`, {
+      method: 'POST',
+    }),
+  getThreadsProgress: (accountId: number) =>
+    request<{ processed: number; total: number }>(`/gmail/threads/build/progress/${accountId}`),
+  getThreadsCount: (accountId: number) =>
+    request<{ processed: number; total: number }>(`/gmail/threads/count/${accountId}`),
+
+  // Contacts
+  buildContactGraph: (accountId: number) =>
+    request<{ status: string; account_id: number }>(`/contacts/build/${accountId}`, {
+      method: 'POST',
+    }),
+  getContacts: (limit = 200) =>
+    request<{ contacts: Contact[] }>(`/contacts?limit=${limit}`),
+  searchContacts: (query: string) =>
+    request<{ contacts: Contact[] }>(`/contacts/search?q=${encodeURIComponent(query)}`),
+
   // Settings
   getSettings: () => request<Record<string, string>>('/settings'),
   updateSetting: (key: string, value: string) =>
@@ -212,4 +278,54 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ key, value }),
     }),
+
+  // AI providers
+  getProviders: () => request<{ providers: AIProvider[] }>('/settings/providers'),
+  updateProvider: (provider: string, patch: ProviderPatch) =>
+    request<{ providers: AIProvider[] }>(`/settings/providers/${provider}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+  deleteProviderKey: (provider: string) =>
+    request<{ providers: AIProvider[] }>(`/settings/providers/${provider}/key`, {
+      method: 'DELETE',
+    }),
+
+  // Embeddings
+  getEmbeddingModels: () =>
+    request<{ models: { model: string; dim: number; provider: string }[] }>(
+      '/settings/embedding-models',
+    ),
+  revectorize: (model: string) =>
+    request<{ queued: boolean }>('/settings/revectorize', {
+      method: 'POST',
+      body: JSON.stringify({ model }),
+    }),
+  getRevectorizeProgress: () =>
+    request<{ total: number; done: number; status: string }>('/settings/revectorize/progress'),
+
+  // Supercharge
+  uploadSupercharge: async (file: File): Promise<SuperchargeUpload> => {
+    const form = new FormData()
+    form.append('file', file)
+    const response = await fetch(`${API_URL}/supercharge/upload`, {
+      method: 'POST',
+      body: form,
+    })
+    if (!response.ok) {
+      let message = response.statusText
+      try {
+        const body = (await response.json()) as ApiError
+        message = body.detail ?? body.error ?? message
+      } catch {
+        // keep status text
+      }
+      throw new Error(message)
+    }
+    return (await response.json()) as SuperchargeUpload
+  },
+  getSuperchargeProgress: (importId: number) =>
+    request<SuperchargeImport>(`/supercharge/progress/${importId}`),
+  getSuperchargeImports: () =>
+    request<{ imports: SuperchargeImport[] }>('/supercharge'),
 }

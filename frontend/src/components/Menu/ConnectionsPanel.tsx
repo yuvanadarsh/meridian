@@ -1,11 +1,12 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { FiCheck, FiPlus, FiTrash2, FiX } from 'react-icons/fi'
-import { HiChevronDown, HiOutlineCalendar } from 'react-icons/hi2'
+import { HiChevronDown, HiOutlineCalendar, HiOutlineCircleStack } from 'react-icons/hi2'
 
 import { api } from '../../api/client'
 import type { GmailAccount } from '../../api/client'
 import { useMeridianStore } from '../../store/meridianStore'
+import { ContactsSection } from './ContactsSection'
 
 /** "Synced 5 min ago" style relative time, or null when never swept. */
 function relativeTime(iso: string | null): string | null {
@@ -40,11 +41,24 @@ export function ConnectionsPanel() {
   const [openAccordionId, setOpenAccordionId] = useState<number | null>(null)
   const [syncingId, setSyncingId] = useState<number | null>(null)
 
+  // Thread build state per account: null = unknown, {processed,total} = known
+  const [threadCounts, setThreadCounts] = useState<Record<number, { processed: number; total: number }>>({})
+  const [buildingThreadsId, setBuildingThreadsId] = useState<number | null>(null)
+  const threadPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
   const load = async () => {
     setLoading(true)
     setError(null)
     try {
-      setAccounts(await api.getAccounts())
+      const loaded = await api.getAccounts()
+      setAccounts(loaded)
+      // Fetch initial thread counts for all accounts in parallel.
+      const counts = await Promise.all(
+        loaded.map((a) => api.getThreadsCount(a.id).catch(() => ({ processed: 0, total: 0 })))
+      )
+      const countMap: Record<number, { processed: number; total: number }> = {}
+      loaded.forEach((a, i) => { countMap[a.id] = counts[i] })
+      setThreadCounts(countMap)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load accounts')
     } finally {
@@ -54,6 +68,9 @@ export function ConnectionsPanel() {
 
   useEffect(() => {
     void load()
+    return () => {
+      if (threadPollRef.current) clearInterval(threadPollRef.current)
+    }
   }, [])
 
   const connect = async (label: string) => {
@@ -107,6 +124,32 @@ export function ConnectionsPanel() {
     setMenuOpen(false)
   }
 
+  const buildThreadsForAccount = async (accountId: number) => {
+    if (buildingThreadsId !== null) return
+    setBuildingThreadsId(accountId)
+    try {
+      await api.buildThreads(accountId)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Thread build failed')
+      setBuildingThreadsId(null)
+      return
+    }
+    // Poll progress every 3 seconds until complete.
+    threadPollRef.current = setInterval(async () => {
+      try {
+        const progress = await api.getThreadsProgress(accountId)
+        setThreadCounts((prev) => ({ ...prev, [accountId]: progress }))
+        if (progress.total > 0 && progress.processed >= progress.total) {
+          if (threadPollRef.current) clearInterval(threadPollRef.current)
+          setBuildingThreadsId(null)
+        }
+      } catch {
+        if (threadPollRef.current) clearInterval(threadPollRef.current)
+        setBuildingThreadsId(null)
+      }
+    }, 3000)
+  }
+
   const syncCalendar = async (accountId: number) => {
     setSyncingId(accountId)
     try {
@@ -140,6 +183,11 @@ export function ConnectionsPanel() {
           const synced = relativeTime(account.last_synced_at)
           const isOpen = openAccordionId === account.id
           const isSyncing = syncingId === account.id
+          const threadCount = threadCounts[account.id]
+          const isBuilding = buildingThreadsId === account.id
+          const threadsBuilt = threadCount && threadCount.total > 0 && threadCount.processed >= threadCount.total
+          // Show "Build threads" for accounts that have been swept and have completed triage.
+          const showBuildThreads = account.sweep_status === 'completed' && !!synced
 
           return (
             <div
@@ -192,6 +240,9 @@ export function ConnectionsPanel() {
                   <div className="truncate text-xs text-white/40">{account.email}</div>
                   <div className="text-xs text-white/30">
                     {synced ? `Synced ${synced}` : 'Not swept yet'}
+                    {threadCount && threadCount.processed > 0 && (
+                      <span className="ml-2 text-white/20">· {threadCount.processed} threads</span>
+                    )}
                   </div>
                 </div>
 
@@ -212,6 +263,33 @@ export function ConnectionsPanel() {
                   >
                     {synced ? 'Re-sweep' : 'Sweep'}
                   </button>
+                  {showBuildThreads && (
+                    <button
+                      type="button"
+                      disabled={isBuilding}
+                      onClick={() => void buildThreadsForAccount(account.id)}
+                      className="flex items-center gap-1.5 rounded-full border border-white/15 px-3 py-1 text-xs text-white/80 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-50"
+                    >
+                      {isBuilding ? (
+                        <>
+                          <span className="h-3 w-3 animate-spin rounded-full border border-white/40 border-t-white/80" />
+                          {threadCount && threadCount.total > 0
+                            ? `Building... ${threadCount.processed} / ${threadCount.total}`
+                            : 'Building threads...'}
+                        </>
+                      ) : threadsBuilt ? (
+                        <>
+                          <HiOutlineCircleStack size={12} />
+                          Threads built ✓
+                        </>
+                      ) : (
+                        <>
+                          <HiOutlineCircleStack size={12} />
+                          Build threads
+                        </>
+                      )}
+                    </button>
+                  )}
                   <button
                     type="button"
                     aria-label={`Remove ${account.email}`}
@@ -324,6 +402,8 @@ export function ConnectionsPanel() {
           <FiPlus size={16} /> Add account
         </button>
       )}
+
+      {accounts.length > 0 && <ContactsSection accounts={accounts} />}
     </div>
   )
 }
