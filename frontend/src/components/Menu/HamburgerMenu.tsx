@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import type { IconType } from 'react-icons'
 import {
+  HiOutlineBolt,
   HiOutlineDocumentText,
   HiOutlineLink,
   HiOutlineNewspaper,
@@ -14,6 +15,7 @@ import DailyBrief from '../Brief/DailyBrief'
 import ConnectionsPanel from './ConnectionsPanel'
 import DraftsPanel from './DraftsPanel'
 import SettingsPanel from './SettingsPanel'
+import SuperchargePanel from './SuperchargePanel'
 
 type Panel = Exclude<ActivePanel, null>
 
@@ -28,6 +30,7 @@ const MENU_ITEMS: MenuItem[] = [
   { panel: 'drafts', label: 'Drafts', icon: HiOutlineDocumentText },
   { panel: 'connections', label: 'Connections', icon: HiOutlineLink },
   { panel: 'brief', label: 'Brief', icon: HiOutlineNewspaper },
+  { panel: 'supercharge', label: 'Supercharge', icon: HiOutlineBolt },
 ]
 
 const PANEL_TITLES: Record<Panel, string> = {
@@ -35,6 +38,7 @@ const PANEL_TITLES: Record<Panel, string> = {
   drafts: 'Drafts',
   connections: 'Connections',
   brief: 'Daily Brief',
+  supercharge: 'Supercharge',
 }
 
 function PanelContent({ panel }: { panel: Panel }) {
@@ -47,6 +51,8 @@ function PanelContent({ panel }: { panel: Panel }) {
       return <ConnectionsPanel />
     case 'brief':
       return <DailyBrief />
+    case 'supercharge':
+      return <SuperchargePanel />
   }
 }
 

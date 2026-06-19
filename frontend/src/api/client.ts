@@ -122,6 +122,22 @@ export interface Digest {
   updated_at: string | null
 }
 
+export interface SuperchargeUpload {
+  import_id: number
+  provider: string
+  total_conversations: number
+}
+
+export interface SuperchargeImport {
+  id: number
+  provider: string
+  filename: string | null
+  total_conversations: number
+  processed_conversations: number
+  status: string
+  created_at: string
+}
+
 export interface AIProvider {
   provider: string
   has_key: boolean
@@ -285,4 +301,29 @@ export const api = {
     }),
   getRevectorizeProgress: () =>
     request<{ total: number; done: number; status: string }>('/settings/revectorize/progress'),
+
+  // Supercharge
+  uploadSupercharge: async (file: File): Promise<SuperchargeUpload> => {
+    const form = new FormData()
+    form.append('file', file)
+    const response = await fetch(`${API_URL}/supercharge/upload`, {
+      method: 'POST',
+      body: form,
+    })
+    if (!response.ok) {
+      let message = response.statusText
+      try {
+        const body = (await response.json()) as ApiError
+        message = body.detail ?? body.error ?? message
+      } catch {
+        // keep status text
+      }
+      throw new Error(message)
+    }
+    return (await response.json()) as SuperchargeUpload
+  },
+  getSuperchargeProgress: (importId: number) =>
+    request<SuperchargeImport>(`/supercharge/progress/${importId}`),
+  getSuperchargeImports: () =>
+    request<{ imports: SuperchargeImport[] }>('/supercharge'),
 }

@@ -10,7 +10,13 @@ export interface ChatMessage {
   timestamp: Date
 }
 
-export type ActivePanel = 'settings' | 'drafts' | 'connections' | 'brief' | null
+export type ActivePanel =
+  | 'settings'
+  | 'drafts'
+  | 'connections'
+  | 'brief'
+  | 'supercharge'
+  | null
 
 interface MeridianStore {
   /** Current orb animation state. */
