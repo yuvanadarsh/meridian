@@ -100,6 +100,28 @@ export interface TriageBulkChange {
   triage_status: TriageStatus
 }
 
+export interface Draft {
+  id: number
+  account_id: number | null
+  to_email: string | null
+  subject: string | null
+  body: string | null
+  thread_email_id: number | null
+  status: string
+  created_at: string
+  updated_at: string
+}
+
+export interface Digest {
+  calendar: string
+  emails: string
+  news: string
+  stocks: string
+  full_text: string
+  cached: boolean
+  updated_at: string | null
+}
+
 export const api = {
   baseUrl: API_URL,
   getAccounts: () => request<GmailAccount[]>('/gmail/accounts'),
@@ -166,4 +188,28 @@ export const api = {
     }),
   getVectorizeProgress: (accountId: number) =>
     request<{ vectorized: number; total: number }>(`/gmail/vectorize/progress/${accountId}`),
+
+  // Drafts
+  getDrafts: () => request<Draft[]>('/drafts'),
+  editDraft: (draftId: number, body: string) =>
+    request<Draft>(`/drafts/${draftId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ body }),
+    }),
+  sendDraft: (draftId: number) =>
+    request<Draft>(`/drafts/${draftId}/send`, { method: 'POST' }),
+  discardDraft: (draftId: number) =>
+    request<{ status: string; id: number }>(`/drafts/${draftId}`, { method: 'DELETE' }),
+
+  // Digest
+  getDigest: () => request<Digest>('/digest/today'),
+  refreshDigest: () => request<Digest>('/digest/refresh', { method: 'POST' }),
+
+  // Settings
+  getSettings: () => request<Record<string, string>>('/settings'),
+  updateSetting: (key: string, value: string) =>
+    request<Record<string, string>>('/settings', {
+      method: 'PATCH',
+      body: JSON.stringify({ key, value }),
+    }),
 }

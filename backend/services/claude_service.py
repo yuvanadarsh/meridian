@@ -23,28 +23,77 @@ def build_system_prompt(
     *,
     calendar_context: str = "",
     obsidian_context: str = "",
+    email_context: str = "",
+    accounts: list[dict] | None = None,
+    tone: str = "concise",
     today: str | None = None,
 ) -> str:
     """Assemble the chat system prompt.
 
-    Concise, voice-first rules followed by any calendar / Obsidian context.
-    Sections are omitted entirely when empty so the prompt stays tight.
+    Concise, voice-first rules followed by any calendar / email / Obsidian
+    context. Sections are omitted entirely when empty so the prompt stays tight.
+    The ``tone`` setting controls response length/personality, and ``accounts``
+    lets Claude pick a valid sending account for draft/calendar actions.
     """
     today_date = today or date.today().isoformat()
     prompt = (
         f"You are Meridian, a personal AI assistant. Today is {today_date}.\n\n"
         "Rules:\n"
-        "- Be direct and concise. Answer in 1-3 sentences unless detail is explicitly requested.\n"
+        f"- {_TONE_RULES.get(tone, _TONE_RULES['concise'])}\n"
         "- No emojis ever.\n"
         "- No markdown formatting in responses — plain text only, since responses are spoken aloud.\n"
         "- Never suggest the user contact a developer or admin. You are the assistant.\n"
         "- Never claim you lack access to calendar or email data without first checking the context provided below.\n"
-        "- You cannot create, edit, or delete calendar events or send emails — say so plainly if asked."
+        "- You can draft emails and create calendar events when asked, using the action protocol below."
     )
+    prompt += "\n\n" + _action_protocol(accounts or [])
+    if email_context:
+        prompt += "\n\nRELEVANT EMAILS:\n" + email_context
     for section in (calendar_context, obsidian_context):
         if section:
             prompt += "\n\n" + section
     return prompt
+
+
+# Tone presets, selectable from Settings and persisted in user_settings.
+_TONE_RULES = {
+    "concise": "Be direct and concise. Answer in 1-3 sentences unless detail is explicitly requested.",
+    "moderate": "Be clear and helpful. Answer in up to a short paragraph with some supporting detail.",
+    "conversational": "Be warm and natural, like a back-and-forth conversation. Show a little personality while staying useful.",
+}
+
+
+def _action_protocol(accounts: list[dict]) -> str:
+    """Instructions that let Claude trigger draft/calendar actions via tokens.
+
+    ``chat.py`` intercepts the emitted ``DRAFT_EMAIL:`` / ``CALENDAR_CREATE:``
+    line, performs the action, and replaces it with a clean confirmation.
+    """
+    if accounts:
+        account_lines = "\n".join(
+            f"  - account_id {a['id']}: {a['email']}" for a in accounts
+        )
+        accounts_block = f"Connected accounts:\n{account_lines}\n"
+        default_id = accounts[0]["id"]
+    else:
+        accounts_block = "No connected accounts.\n"
+        default_id = 1
+
+    return (
+        "ACTIONS:\n"
+        f"{accounts_block}"
+        "If the user asks you to draft, write, or compose an email or reply, respond with ONLY "
+        "this JSON on the first line, then a short confirmation sentence:\n"
+        'DRAFT_EMAIL:{"account_id":' + str(default_id) + ',"to_email":"...","subject":"...","context":"what the email should say","thread_email_id":null}\n'
+        "Use the RELEVANT EMAILS context to fill to_email when replying to someone. "
+        "If you cannot determine a recipient, leave to_email as an empty string.\n"
+        "If the user asks you to schedule, create, or add a calendar event, respond with ONLY this "
+        "JSON on the first line, then your confirmation message:\n"
+        'CALENDAR_CREATE:{"account_id":' + str(default_id) + ',"title":"...","start":"2026-06-19T15:00:00","end":"2026-06-19T16:00:00","description":""}\n'
+        "Times are local (America/New_York), ISO 8601, no timezone suffix. Default events to one "
+        "hour when the user gives only a start time.\n"
+        "Only emit an action token when the user clearly requests that action."
+    )
 
 _client: AsyncAnthropic | None = None
 

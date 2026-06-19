@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { api } from '../api/client'
+import { speak } from '../api/speak'
 import { useMeridianStore } from '../store/meridianStore'
 import { useChat } from './useChat'
 
@@ -29,33 +29,6 @@ export function useVoice() {
   const [supported] = useState(() => getRecognitionCtor() !== null)
   const recognitionRef = useRef<SpeechRecognition | null>(null)
 
-  const speak = useCallback(
-    async (text: string) => {
-      try {
-        const response = await fetch(`${api.baseUrl}/voice/speak`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text }),
-        })
-        if (!response.ok) {
-          throw new Error('TTS request failed')
-        }
-        const blob = await response.blob()
-        const audio = new Audio(URL.createObjectURL(blob))
-        setOrbState('speaking')
-        audio.onended = () => {
-          setOrbState('idle')
-          URL.revokeObjectURL(audio.src)
-        }
-        await audio.play()
-      } catch {
-        // Voice is best-effort; fall back to the (already shown) text reply.
-        setOrbState('idle')
-      }
-    },
-    [setOrbState],
-  )
-
   const handleTranscript = useCallback(
     async (transcript: string) => {
       const reply = await send(transcript) // animates thinking → idle
@@ -63,7 +36,7 @@ export function useVoice() {
         await speak(reply) // animates speaking → idle
       }
     },
-    [send, speak],
+    [send],
   )
 
   const startRecording = useCallback(() => {
