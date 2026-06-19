@@ -38,107 +38,143 @@ async def build_threads(account_id: int, db: AsyncSession) -> dict:
 
     Returns ``{built, total}`` over the distinct threads for the account.
     """
-    result = await db.execute(
-        text(
-            """
-            SELECT id, thread_id, from_address, to_addresses, subject,
-                   body_text, received_at
-            FROM emails
-            WHERE account_id = :account_id AND thread_id IS NOT NULL
-            ORDER BY thread_id, received_at ASC
-            """
-        ),
-        {"account_id": account_id},
-    )
-    rows = list(result.mappings().all())
+    logger.info("Thread build starting for account %s", account_id)
 
-    # Group rows by Gmail thread_id, preserving chronological order.
-    threads: dict[str, list[dict]] = {}
-    for row in rows:
-        threads.setdefault(row["thread_id"], []).append(dict(row))
+    try:
+        # Diagnostic: confirm emails exist for this account before proceeding.
+        count_result = await db.execute(
+            text("SELECT count(*) FROM emails WHERE account_id = :account_id"),
+            {"account_id": account_id},
+        )
+        email_count = count_result.scalar() or 0
+        logger.info("Account %s has %s emails in DB", account_id, email_count)
 
-    embed_config = await vector_service.get_embedding_config(db)
-    can_embed = embed_config["provider"] != "voyage" or bool(settings.voyage_api_key)
-    expected_dim = embed_config["dim"]
-    built = 0
-    for thread_id, messages in threads.items():
-        # The subject of the first message is the canonical thread subject.
-        subject = messages[0]["subject"] or ""
-        last_message_at = messages[-1]["received_at"]
+        result = await db.execute(
+            text(
+                """
+                SELECT id, thread_id, from_address, to_addresses, subject,
+                       body_text, received_at
+                FROM emails
+                WHERE account_id = :account_id AND thread_id IS NOT NULL
+                ORDER BY thread_id, received_at ASC
+                """
+            ),
+            {"account_id": account_id},
+        )
+        rows = list(result.mappings().all())
 
-        participants: list[str] = []
-        for msg in messages:
-            if msg["from_address"]:
-                participants.append(msg["from_address"])
-            for addr in msg["to_addresses"] or []:
-                participants.append(addr)
-        # Dedupe while keeping first-seen order.
-        participants = list(dict.fromkeys(participants))
+        # Group rows by Gmail thread_id, preserving chronological order.
+        threads: dict[str, list[dict]] = {}
+        for row in rows:
+            threads.setdefault(row["thread_id"], []).append(dict(row))
 
-        embedding_literal = None
-        if can_embed:
-            summary = _thread_summary(
-                subject, participants, [m["body_text"] or "" for m in messages]
+        logger.info("Found %s distinct threads for account %s", len(threads), account_id)
+        if not threads:
+            logger.warning(
+                "No emails with thread_id found for account %s — "
+                "check that account_id matches emails.account_id and that sweep completed",
+                account_id,
             )
-            try:
-                embedding = (await vector_service.embed_texts([summary], db))[0]
-            except Exception:  # noqa: BLE001 — leave is_vectorized FALSE, retry later
-                logger.exception("Failed to embed thread %s", thread_id)
-            else:
-                if len(embedding) == expected_dim:
-                    embedding_literal = vector_service.to_pgvector(embedding)
+            return {"built": 0, "total": 0}
 
-        upsert = await db.execute(
-            text(
-                """
-                INSERT INTO email_threads
-                    (account_id, thread_id, subject, participants, message_count,
-                     last_message_at, embedding, is_vectorized)
-                VALUES
-                    (:account_id, :thread_id, :subject, :participants, :message_count,
-                     :last_message_at,
-                     CASE WHEN :embedding IS NULL THEN NULL ELSE CAST(:embedding AS vector) END,
-                     :is_vectorized)
-                ON CONFLICT (account_id, thread_id) DO UPDATE SET
-                    subject = EXCLUDED.subject,
-                    participants = EXCLUDED.participants,
-                    message_count = EXCLUDED.message_count,
-                    last_message_at = EXCLUDED.last_message_at,
-                    embedding = EXCLUDED.embedding,
-                    is_vectorized = EXCLUDED.is_vectorized
-                RETURNING id
-                """
-            ),
-            {
-                "account_id": account_id,
-                "thread_id": thread_id,
-                "subject": subject,
-                "participants": participants,
-                "message_count": len(messages),
-                "last_message_at": last_message_at,
-                "embedding": embedding_literal,
-                "is_vectorized": embedding_literal is not None,
-            },
+        embed_config = await vector_service.get_embedding_config(db)
+        can_embed = embed_config["provider"] != "voyage" or bool(settings.voyage_api_key)
+        expected_dim = embed_config["dim"]
+        logger.info(
+            "Embedding config for account %s: provider=%s model=%s dim=%s can_embed=%s",
+            account_id, embed_config["provider"], embed_config["model"], expected_dim, can_embed,
         )
-        thread_db_id = upsert.scalar_one()
 
-        # Point every message in this thread at its parent thread row.
-        await db.execute(
-            text(
-                "UPDATE emails SET thread_db_id = :thread_db_id "
-                "WHERE account_id = :account_id AND thread_id = :thread_id"
-            ),
-            {
-                "thread_db_id": thread_db_id,
-                "account_id": account_id,
-                "thread_id": thread_id,
-            },
-        )
-        await db.commit()
-        built += 1
+        built = 0
+        for thread_id, messages in threads.items():
+            # The subject of the first message is the canonical thread subject.
+            subject = messages[0]["subject"] or ""
+            last_message_at = messages[-1]["received_at"]
 
-    logger.info("Built %s threads for account %s", built, len(threads))
-    return {"built": built, "total": len(threads)}
+            participants: list[str] = []
+            for msg in messages:
+                if msg["from_address"]:
+                    participants.append(msg["from_address"])
+                for addr in msg["to_addresses"] or []:
+                    participants.append(addr)
+            # Dedupe while keeping first-seen order.
+            participants = list(dict.fromkeys(participants))
+
+            embedding_literal = None
+            if can_embed:
+                summary = _thread_summary(
+                    subject, participants, [m["body_text"] or "" for m in messages]
+                )
+                try:
+                    embedding = (await vector_service.embed_texts([summary], db))[0]
+                except Exception:  # noqa: BLE001 — leave is_vectorized FALSE, retry later
+                    logger.exception("Failed to embed thread %s", thread_id)
+                else:
+                    if len(embedding) == expected_dim:
+                        embedding_literal = vector_service.to_pgvector(embedding)
+
+            # Step 1: upsert thread row without embedding to avoid asyncpg type ambiguity.
+            upsert = await db.execute(
+                text(
+                    """
+                    INSERT INTO email_threads
+                        (account_id, thread_id, subject, participants, message_count,
+                         last_message_at, is_vectorized)
+                    VALUES
+                        (:account_id, :thread_id, :subject, :participants, :message_count,
+                         :last_message_at, :is_vectorized)
+                    ON CONFLICT (account_id, thread_id) DO UPDATE SET
+                        subject = EXCLUDED.subject,
+                        participants = EXCLUDED.participants,
+                        message_count = EXCLUDED.message_count,
+                        last_message_at = EXCLUDED.last_message_at,
+                        is_vectorized = EXCLUDED.is_vectorized
+                    RETURNING id
+                    """
+                ),
+                {
+                    "account_id": account_id,
+                    "thread_id": thread_id,
+                    "subject": subject,
+                    "participants": participants,
+                    "message_count": len(messages),
+                    "last_message_at": last_message_at,
+                    "is_vectorized": embedding_literal is not None,
+                },
+            )
+            thread_db_id = upsert.scalar_one()
+
+            # Step 2: update embedding separately so ::vector cast is unambiguous.
+            if embedding_literal is not None:
+                await db.execute(
+                    text(
+                        "UPDATE email_threads SET embedding = :embedding::vector "
+                        "WHERE id = :id"
+                    ),
+                    {"embedding": embedding_literal, "id": thread_db_id},
+                )
+
+            # Point every message in this thread at its parent thread row.
+            await db.execute(
+                text(
+                    "UPDATE emails SET thread_db_id = :thread_db_id "
+                    "WHERE account_id = :account_id AND thread_id = :thread_id"
+                ),
+                {
+                    "thread_db_id": thread_db_id,
+                    "account_id": account_id,
+                    "thread_id": thread_id,
+                },
+            )
+            await db.commit()
+            built += 1
+
+        logger.info("Thread build complete for account %s: %s / %s threads built", account_id, built, len(threads))
+        return {"built": built, "total": len(threads)}
+
+    except Exception:
+        logger.error("Thread build failed for account %s", account_id, exc_info=True)
+        raise
 
 
 async def run_build_threads_background(account_id: int) -> None:
