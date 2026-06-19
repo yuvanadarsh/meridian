@@ -19,6 +19,7 @@ from db.database import check_connection
 from routers import (
     calendar,
     chat,
+    contacts,
     digest,
     drafts,
     gmail,
@@ -83,6 +84,7 @@ app.include_router(obsidian.router)
 app.include_router(drafts.router)
 app.include_router(digest.router)
 app.include_router(settings_router.router)
+app.include_router(contacts.router)
 
 
 # All failures return the shape { error: string, detail?: string }.

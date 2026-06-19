@@ -122,6 +122,17 @@ export interface Digest {
   updated_at: string | null
 }
 
+export interface Contact {
+  email_address: string
+  display_name: string | null
+  email_count: number
+  sent_count: number
+  received_count: number
+  first_contacted: string | null
+  last_contacted: string | null
+  topics: string[] | null
+}
+
 export const api = {
   baseUrl: API_URL,
   getAccounts: () => request<GmailAccount[]>('/gmail/accounts'),
@@ -204,6 +215,24 @@ export const api = {
   // Digest
   getDigest: () => request<Digest>('/digest/today'),
   refreshDigest: () => request<Digest>('/digest/refresh', { method: 'POST' }),
+
+  // Threads
+  buildThreads: (accountId: number) =>
+    request<{ status: string; account_id: number }>(`/gmail/threads/build/${accountId}`, {
+      method: 'POST',
+    }),
+  getThreadsProgress: (accountId: number) =>
+    request<{ processed: number; total: number }>(`/gmail/threads/build/progress/${accountId}`),
+
+  // Contacts
+  buildContactGraph: (accountId: number) =>
+    request<{ status: string; account_id: number }>(`/contacts/build/${accountId}`, {
+      method: 'POST',
+    }),
+  getContacts: (limit = 200) =>
+    request<{ contacts: Contact[] }>(`/contacts?limit=${limit}`),
+  searchContacts: (query: string) =>
+    request<{ contacts: Contact[] }>(`/contacts/search?q=${encodeURIComponent(query)}`),
 
   // Settings
   getSettings: () => request<Record<string, string>>('/settings'),
