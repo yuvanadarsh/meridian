@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import get_settings
 from db.database import get_db
 from models.gmail import AccountUpdate, BulkTriageRequest, SweepOptions, TriageApproval
-from services import gmail_service, triage_service, vector_service
+from services import gmail_service, thread_service, triage_service, vector_service
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -240,3 +240,23 @@ async def start_vectorize(
 async def vectorize_progress(account_id: int, db: AsyncSession = Depends(get_db)):
     """Return how many keep/archive emails have been embedded so far."""
     return await vector_service.vectorize_progress(account_id, db)
+
+
+@router.post("/threads/build/{account_id}")
+async def build_threads(
+    account_id: int,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    """Group an account's emails into conversation threads (background task)."""
+    accounts = await gmail_service.list_accounts(db)
+    if not any(account["id"] == account_id for account in accounts):
+        raise HTTPException(status_code=404, detail="Account not found")
+    background_tasks.add_task(thread_service.run_build_threads_background, account_id)
+    return {"status": "started", "account_id": account_id}
+
+
+@router.get("/threads/build/progress/{account_id}")
+async def build_threads_progress(account_id: int, db: AsyncSession = Depends(get_db)):
+    """Return ``{processed, total}`` for an account's thread build."""
+    return await thread_service.build_progress(account_id, db)
