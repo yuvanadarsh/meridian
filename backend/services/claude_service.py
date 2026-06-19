@@ -27,6 +27,7 @@ def build_system_prompt(
     accounts: list[dict] | None = None,
     tone: str = "concise",
     today: str | None = None,
+    allow_draft: bool = False,
 ) -> str:
     """Assemble the chat system prompt.
 
@@ -34,8 +35,17 @@ def build_system_prompt(
     context. Sections are omitted entirely when empty so the prompt stays tight.
     The ``tone`` setting controls response length/personality, and ``accounts``
     lets Claude pick a valid sending account for draft/calendar actions.
+
+    ``allow_draft`` gates the email-drafting instructions. The caller only sets
+    it when the user's message is an explicit draft request (see
+    ``chat.is_draft_intent``). When False, the draft protocol is stripped
+    entirely so Claude cannot accidentally emit a ``DRAFT_EMAIL:`` token in
+    response to a plain question that merely mentions email.
     """
     today_date = today or date.today().isoformat()
+    capabilities = (
+        "draft emails and create calendar events" if allow_draft else "create calendar events"
+    )
     prompt = (
         f"You are Meridian, a personal AI assistant. Today is {today_date}.\n\n"
         "Rules:\n"
@@ -44,9 +54,9 @@ def build_system_prompt(
         "- No markdown formatting in responses — plain text only, since responses are spoken aloud.\n"
         "- Never suggest the user contact a developer or admin. You are the assistant.\n"
         "- Never claim you lack access to calendar or email data without first checking the context provided below.\n"
-        "- You can draft emails and create calendar events when asked, using the action protocol below."
+        f"- You can {capabilities} when asked, using the action protocol below."
     )
-    prompt += "\n\n" + _action_protocol(accounts or [])
+    prompt += "\n\n" + _action_protocol(accounts or [], include_draft=allow_draft)
     if email_context:
         prompt += "\n\nRELEVANT EMAILS:\n" + email_context
     for section in (calendar_context, obsidian_context):
@@ -63,11 +73,14 @@ _TONE_RULES = {
 }
 
 
-def _action_protocol(accounts: list[dict]) -> str:
+def _action_protocol(accounts: list[dict], *, include_draft: bool = False) -> str:
     """Instructions that let Claude trigger draft/calendar actions via tokens.
 
     ``chat.py`` intercepts the emitted ``DRAFT_EMAIL:`` / ``CALENDAR_CREATE:``
-    line, performs the action, and replaces it with a clean confirmation.
+    line, performs the action, and replaces it with a clean confirmation. The
+    ``DRAFT_EMAIL:`` instructions are only included when ``include_draft`` is
+    True (an explicit draft request) — otherwise they are omitted so Claude
+    cannot accidentally draft an email in response to a plain email question.
     """
     if accounts:
         account_lines = "\n".join(
@@ -79,14 +92,20 @@ def _action_protocol(accounts: list[dict]) -> str:
         accounts_block = "No connected accounts.\n"
         default_id = 1
 
+    draft_block = ""
+    if include_draft:
+        draft_block = (
+            "If the user asks you to draft, write, or compose an email or reply, respond with ONLY "
+            "this JSON on the first line, then a short confirmation sentence:\n"
+            'DRAFT_EMAIL:{"account_id":' + str(default_id) + ',"to_email":"...","subject":"...","context":"what the email should say","thread_email_id":null}\n'
+            "Use the RELEVANT EMAILS context to fill to_email when replying to someone. "
+            "If you cannot determine a recipient, leave to_email as an empty string.\n"
+        )
+
     return (
         "ACTIONS:\n"
         f"{accounts_block}"
-        "If the user asks you to draft, write, or compose an email or reply, respond with ONLY "
-        "this JSON on the first line, then a short confirmation sentence:\n"
-        'DRAFT_EMAIL:{"account_id":' + str(default_id) + ',"to_email":"...","subject":"...","context":"what the email should say","thread_email_id":null}\n'
-        "Use the RELEVANT EMAILS context to fill to_email when replying to someone. "
-        "If you cannot determine a recipient, leave to_email as an empty string.\n"
+        f"{draft_block}"
         "If the user asks you to schedule, create, or add a calendar event, respond with ONLY this "
         "JSON on the first line, then your confirmation message:\n"
         'CALENDAR_CREATE:{"account_id":' + str(default_id) + ',"title":"...","start":"2026-06-19T15:00:00","end":"2026-06-19T16:00:00","description":""}\n'

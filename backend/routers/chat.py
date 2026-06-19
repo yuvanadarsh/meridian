@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -49,6 +50,35 @@ _DIGEST_TRIGGERS = (
 def _is_digest_request(message: str) -> bool:
     text_lower = message.lower()
     return any(trigger in text_lower for trigger in _DIGEST_TRIGGERS)
+
+
+# Only these explicit phrases should put Claude into email-drafting mode. A plain
+# question that happens to mention "email", a person, or a subject must NOT trigger
+# a draft — that hallucination was the Phase 3 bug this guards against.
+DRAFT_TRIGGER_PHRASES = (
+    "draft an email",
+    "draft a reply",
+    "draft me",
+    "write an email",
+    "compose an email",
+    "reply to",
+    "send an email",
+    "write a message to",
+)
+
+# Loose RFC-ish check: a recipient must at least look like local@domain.tld.
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def is_draft_intent(message: str) -> bool:
+    """True only when the user explicitly asks to draft/write/send an email.
+
+    Used to decide whether to expose the ``DRAFT_EMAIL:`` action protocol to
+    Claude at all. Keeping this strict prevents accidental drafts on questions
+    like "what did Max email me about?".
+    """
+    msg_lower = message.lower()
+    return any(phrase in msg_lower for phrase in DRAFT_TRIGGER_PHRASES)
 
 
 async def _calendar_context(db: AsyncSession) -> str:
@@ -109,21 +139,30 @@ async def _calendar_context(db: AsyncSession) -> str:
     return "\n\n".join(parts)
 
 
-async def _maybe_handle_action(reply: str, db: AsyncSession) -> str | None:
+async def _maybe_handle_action(
+    reply: str, db: AsyncSession, *, allow_draft: bool = False
+) -> str | None:
     """Intercept an action token Claude emitted and perform it.
 
     Returns a clean confirmation message to replace the raw reply, or None when
-    the reply contains no action token (normal chat).
+    the reply contains no action token (normal chat). ``DRAFT_EMAIL:`` tokens are
+    only honored when ``allow_draft`` is True — a defensive second gate on top of
+    stripping the draft protocol from the system prompt.
     """
     first_line, _, _ = reply.partition("\n")
     first_line = first_line.strip()
 
-    if first_line.startswith("DRAFT_EMAIL:"):
+    if allow_draft and first_line.startswith("DRAFT_EMAIL:"):
         try:
             params = json.loads(first_line[len("DRAFT_EMAIL:") :])
         except json.JSONDecodeError:
             logger.warning("Malformed DRAFT_EMAIL token: %s", first_line)
             return None
+        # Refuse to save a draft addressed to nobody / garbage — ask instead.
+        to_email = (params.get("to_email") or "").strip()
+        if not EMAIL_RE.match(to_email):
+            logger.warning("DRAFT_EMAIL missing/invalid to_email: %r", to_email)
+            return "Who should I address this email to? Please give me an email address."
         account_id = params.get("account_id")
         if not account_id:
             accounts = await gmail_service.list_accounts(db)
@@ -133,7 +172,7 @@ async def _maybe_handle_action(reply: str, db: AsyncSession) -> str | None:
         try:
             await draft_service.generate_draft(
                 account_id=account_id,
-                to_email=params.get("to_email", ""),
+                to_email=to_email,
                 subject=params.get("subject", ""),
                 context=params.get("context", ""),
                 db=db,
@@ -276,6 +315,10 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
     except Exception:  # noqa: BLE001
         accounts = []
 
+    # Only expose the draft action protocol when the user explicitly asked to
+    # draft/write/send an email — keeps Claude from hallucinating drafts.
+    draft_intent = is_draft_intent(payload.message)
+
     calendar_context = await _calendar_context(db)
     obsidian_context = await obsidian_service.get_obsidian_context(payload.message, db)
     email_context = await vector_service.get_email_context(payload.message, db)
@@ -286,6 +329,7 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
         email_context=email_context,
         accounts=accounts,
         tone=tone,
+        allow_draft=draft_intent,
     )
 
     messages = await _recent_history(db)
@@ -299,7 +343,7 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
 
     # If Claude emitted an action token (e.g. drafting an email), perform it and
     # replace the raw reply with a clean confirmation before persisting/returning.
-    action_reply = await _maybe_handle_action(reply, db)
+    action_reply = await _maybe_handle_action(reply, db, allow_draft=draft_intent)
     if action_reply is not None:
         reply = action_reply
 
