@@ -650,3 +650,39 @@ async def run_sweep_background(
                 await mark_sweep_error(db, account_id, str(exc))
             except Exception:  # noqa: BLE001
                 logger.exception("Could not record sweep error for account %s", account_id)
+
+
+async def get_full_thread_from_gmail(
+    thread_id: str, account_id: int, db: AsyncSession
+) -> list[dict]:
+    """Fetch all messages in a Gmail thread via the API and return structured dicts.
+
+    Used for tier 2 deep retrieval: fetches the full thread content from Gmail
+    rather than the truncated body_text stored locally.
+    """
+    creds = await load_credentials(db, account_id)
+    service = await asyncio.to_thread(
+        lambda: build("gmail", "v1", credentials=creds, cache_discovery=False)
+    )
+
+    thread = await asyncio.to_thread(
+        lambda: service.users().threads().get(
+            userId="me", id=thread_id, format="full"
+        ).execute()
+    )
+
+    messages = []
+    for msg in thread.get("messages", []):
+        body = extract_body(msg.get("payload", {}))
+        headers = msg.get("payload", {}).get("headers", [])
+        received_at = datetime.fromtimestamp(
+            int(msg.get("internalDate", 0)) / 1000, tz=timezone.utc
+        ).replace(tzinfo=None)
+        messages.append({
+            "from_address": extract_header(headers, "from"),
+            "subject": extract_header(headers, "subject"),
+            "body_text": body,
+            "received_at": received_at,
+        })
+
+    return messages
