@@ -26,6 +26,7 @@ from routers import (
     health,
     obsidian,
     settings as settings_router,
+    supercharge,
     voice,
 )
 from services import obsidian_service
@@ -85,6 +86,7 @@ app.include_router(drafts.router)
 app.include_router(digest.router)
 app.include_router(settings_router.router)
 app.include_router(contacts.router)
+app.include_router(supercharge.router)
 
 
 # All failures return the shape { error: string, detail?: string }.
