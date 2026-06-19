@@ -163,7 +163,9 @@ async def build_contact_graph(account_id: int, db: AsyncSession) -> dict:
     contact_list = list(contacts.values())
     topics_by_email = await _extract_topics(contact_list)
 
-    can_embed = bool(vector_service.settings.voyage_api_key)
+    embed_config = await vector_service.get_embedding_config(db)
+    expected_dim = embed_config["dim"]
+    can_embed = embed_config["provider"] != "voyage" or bool(vector_service.settings.voyage_api_key)
     for entry in contact_list:
         entry["topics"] = topics_by_email.get(entry["email_address"], [])
 
@@ -177,7 +179,7 @@ async def build_contact_graph(account_id: int, db: AsyncSession) -> dict:
             for c in contact_list
         ]
         try:
-            embeddings = await vector_service.embed_texts(summaries)
+            embeddings = await vector_service.embed_texts(summaries, db)
         except Exception:  # noqa: BLE001
             logger.exception("Contact embedding failed — storing contacts without vectors")
             embeddings = [None] * len(contact_list)
@@ -185,7 +187,7 @@ async def build_contact_graph(account_id: int, db: AsyncSession) -> dict:
     upserted = 0
     for entry, embedding in zip(contact_list, embeddings):
         literal = None
-        if embedding is not None and len(embedding) == vector_service.EMBED_DIM:
+        if embedding is not None and len(embedding) == expected_dim:
             literal = vector_service.to_pgvector(embedding)
         await db.execute(
             text(

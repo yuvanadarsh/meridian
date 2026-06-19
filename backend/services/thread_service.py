@@ -57,7 +57,9 @@ async def build_threads(account_id: int, db: AsyncSession) -> dict:
     for row in rows:
         threads.setdefault(row["thread_id"], []).append(dict(row))
 
-    can_embed = bool(settings.voyage_api_key)
+    embed_config = await vector_service.get_embedding_config(db)
+    can_embed = embed_config["provider"] != "voyage" or bool(settings.voyage_api_key)
+    expected_dim = embed_config["dim"]
     built = 0
     for thread_id, messages in threads.items():
         # The subject of the first message is the canonical thread subject.
@@ -79,11 +81,11 @@ async def build_threads(account_id: int, db: AsyncSession) -> dict:
                 subject, participants, [m["body_text"] or "" for m in messages]
             )
             try:
-                embedding = (await vector_service.embed_texts([summary]))[0]
+                embedding = (await vector_service.embed_texts([summary], db))[0]
             except Exception:  # noqa: BLE001 — leave is_vectorized FALSE, retry later
                 logger.exception("Failed to embed thread %s", thread_id)
             else:
-                if len(embedding) == vector_service.EMBED_DIM:
+                if len(embedding) == expected_dim:
                     embedding_literal = vector_service.to_pgvector(embedding)
 
         upsert = await db.execute(
