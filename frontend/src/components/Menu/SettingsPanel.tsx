@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 
 import { api } from '../../api/client'
 import { AIProvidersSection } from './AIProvidersSection'
+import { EmbeddingsSection } from './EmbeddingsSection'
 
 type Tone = 'concise' | 'moderate' | 'conversational'
 
@@ -175,6 +176,11 @@ export function SettingsPanel() {
       {/* AI providers */}
       <div className="border-t border-white/[0.06] pt-5">
         <AIProvidersSection />
+      </div>
+
+      {/* Memory & embeddings */}
+      <div className="border-t border-white/[0.06] pt-5">
+        <EmbeddingsSection />
       </div>
     </div>
   )

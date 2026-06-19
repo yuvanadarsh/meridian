@@ -272,4 +272,17 @@ export const api = {
     request<{ providers: AIProvider[] }>(`/settings/providers/${provider}/key`, {
       method: 'DELETE',
     }),
+
+  // Embeddings
+  getEmbeddingModels: () =>
+    request<{ models: { model: string; dim: number; provider: string }[] }>(
+      '/settings/embedding-models',
+    ),
+  revectorize: (model: string) =>
+    request<{ queued: boolean }>('/settings/revectorize', {
+      method: 'POST',
+      body: JSON.stringify({ model }),
+    }),
+  getRevectorizeProgress: () =>
+    request<{ total: number; done: number; status: string }>('/settings/revectorize/progress'),
 }
