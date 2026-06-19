@@ -199,6 +199,8 @@ async def approve_triage(
     # Build memory from the surviving keep + archive emails, then group into threads.
     background_tasks.add_task(vector_service.run_vectorize_background, account_id)
     background_tasks.add_task(thread_service.run_build_threads_background, account_id)
+    # Export threads to Obsidian vault after vectorization and thread build are queued.
+    background_tasks.add_task(obsidian_service.export_threads_to_obsidian_background, account_id)
     return result
 
 
