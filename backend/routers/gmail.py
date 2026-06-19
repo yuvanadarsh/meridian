@@ -198,8 +198,9 @@ async def approve_triage(
     except Exception as exc:  # noqa: BLE001
         logger.exception("Failed to apply triage for account %s", account_id)
         raise HTTPException(status_code=500, detail=f"Failed to apply triage: {exc}") from exc
-    # Build memory from the surviving keep + archive emails.
+    # Build memory from the surviving keep + archive emails, then group into threads.
     background_tasks.add_task(vector_service.run_vectorize_background, account_id)
+    background_tasks.add_task(thread_service.run_build_threads_background, account_id)
     return result
 
 
@@ -222,17 +223,29 @@ async def bulk_update_triage(
     return {"updated": updated}
 
 
+async def _vectorize_and_build_threads(account_id: int) -> None:
+    """Run vectorization then thread build sequentially in a single background task."""
+    from db.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        try:
+            await vector_service.vectorize_account(account_id, db)
+            await thread_service.build_threads(account_id, db)
+        except Exception:  # noqa: BLE001
+            logger.exception("vectorize+build_threads failed for account %s", account_id)
+
+
 @router.post("/vectorize/{account_id}")
 async def start_vectorize(
     account_id: int,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
-    """Embed an account's keep/archive emails (background task)."""
+    """Embed an account's keep/archive emails, then build threads (background task)."""
     accounts = await gmail_service.list_accounts(db)
     if not any(account["id"] == account_id for account in accounts):
         raise HTTPException(status_code=404, detail="Account not found")
-    background_tasks.add_task(vector_service.run_vectorize_background, account_id)
+    background_tasks.add_task(_vectorize_and_build_threads, account_id)
     return {"status": "started", "account_id": account_id}
 
 
@@ -259,4 +272,10 @@ async def build_threads(
 @router.get("/threads/build/progress/{account_id}")
 async def build_threads_progress(account_id: int, db: AsyncSession = Depends(get_db)):
     """Return ``{processed, total}`` for an account's thread build."""
+    return await thread_service.build_progress(account_id, db)
+
+
+@router.get("/threads/count/{account_id}")
+async def thread_count(account_id: int, db: AsyncSession = Depends(get_db)):
+    """Return ``{processed, total}`` — built threads vs distinct thread_ids (alias of build progress)."""
     return await thread_service.build_progress(account_id, db)
