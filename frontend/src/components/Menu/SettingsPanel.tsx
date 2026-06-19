@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 
 import { api } from '../../api/client'
+import { AIProvidersSection } from './AIProvidersSection'
 
 type Tone = 'concise' | 'moderate' | 'conversational'
 
@@ -169,6 +170,11 @@ export function SettingsPanel() {
             }`}
           />
         </button>
+      </div>
+
+      {/* AI providers */}
+      <div className="border-t border-white/[0.06] pt-5">
+        <AIProvidersSection />
       </div>
     </div>
   )

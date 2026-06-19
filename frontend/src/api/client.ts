@@ -122,6 +122,25 @@ export interface Digest {
   updated_at: string | null
 }
 
+export interface AIProvider {
+  provider: string
+  has_key: boolean
+  base_url: string | null
+  is_active: boolean
+  model_chat: string | null
+  model_classify: string | null
+  model_draft: string | null
+}
+
+export interface ProviderPatch {
+  api_key?: string
+  base_url?: string
+  model_chat?: string
+  model_classify?: string
+  model_draft?: string
+  activate?: boolean
+}
+
 export interface Contact {
   email_address: string
   display_name: string | null
@@ -240,5 +259,17 @@ export const api = {
     request<Record<string, string>>('/settings', {
       method: 'PATCH',
       body: JSON.stringify({ key, value }),
+    }),
+
+  // AI providers
+  getProviders: () => request<{ providers: AIProvider[] }>('/settings/providers'),
+  updateProvider: (provider: string, patch: ProviderPatch) =>
+    request<{ providers: AIProvider[] }>(`/settings/providers/${provider}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+  deleteProviderKey: (provider: string) =>
+    request<{ providers: AIProvider[] }>(`/settings/providers/${provider}/key`, {
+      method: 'DELETE',
     }),
 }
