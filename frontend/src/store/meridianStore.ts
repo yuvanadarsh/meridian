@@ -29,6 +29,8 @@ interface MeridianStore {
   chatOpen: boolean
   /** Whether the hamburger menu is open. */
   menuOpen: boolean
+  /** Whether the Daily Brief centered modal is open. */
+  briefOpen: boolean
   /** Which slide-up panel is showing, if any. */
   activePanel: ActivePanel
   /** Email just connected via OAuth — hands off into the onboarding flow. */
@@ -45,6 +47,7 @@ interface MeridianStore {
   setTokensToday: (n: number) => void
   setChatOpen: (open: boolean) => void
   setMenuOpen: (open: boolean) => void
+  setBriefOpen: (open: boolean) => void
   setActivePanel: (panel: ActivePanel) => void
   setJustConnectedEmail: (email: string | null) => void
   setOnboardingAccountId: (id: number | null) => void
@@ -57,6 +60,7 @@ export const useMeridianStore = create<MeridianStore>((set) => ({
   tokensToday: 0,
   chatOpen: false,
   menuOpen: false,
+  briefOpen: false,
   activePanel: null,
   justConnectedEmail: null,
   onboardingAccountId: null,
@@ -68,6 +72,7 @@ export const useMeridianStore = create<MeridianStore>((set) => ({
   setTokensToday: (tokensToday) => set({ tokensToday }),
   setChatOpen: (chatOpen) => set({ chatOpen }),
   setMenuOpen: (menuOpen) => set({ menuOpen }),
+  setBriefOpen: (briefOpen) => set({ briefOpen }),
   setActivePanel: (activePanel) => set({ activePanel }),
   setJustConnectedEmail: (justConnectedEmail) => set({ justConnectedEmail }),
   setOnboardingAccountId: (onboardingAccountId) => set({ onboardingAccountId }),

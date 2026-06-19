@@ -11,18 +11,19 @@ import { RxHamburgerMenu } from 'react-icons/rx'
 
 import { useMeridianStore } from '../../store/meridianStore'
 import type { ActivePanel } from '../../store/meridianStore'
-import DailyBrief from '../Brief/DailyBrief'
 import ConnectionsPanel from './ConnectionsPanel'
 import DraftsPanel from './DraftsPanel'
 import SettingsPanel from './SettingsPanel'
 import SuperchargePanel from './SuperchargePanel'
 
-type Panel = Exclude<ActivePanel, null>
+// The Brief opens as its own centered modal rather than a slide-up panel.
+type Panel = Exclude<ActivePanel, null | 'brief'>
 
 interface MenuItem {
-  panel: Panel
   label: string
   icon: IconType
+  // Either a slide-up panel, or 'brief' which opens the centered Brief modal.
+  panel: Panel | 'brief'
 }
 
 const MENU_ITEMS: MenuItem[] = [
@@ -37,7 +38,6 @@ const PANEL_TITLES: Record<Panel, string> = {
   settings: 'Settings',
   drafts: 'Drafts',
   connections: 'Connections',
-  brief: 'Daily Brief',
   supercharge: 'Supercharge',
 }
 
@@ -49,8 +49,6 @@ function PanelContent({ panel }: { panel: Panel }) {
       return <DraftsPanel />
     case 'connections':
       return <ConnectionsPanel />
-    case 'brief':
-      return <DailyBrief />
     case 'supercharge':
       return <SuperchargePanel />
   }
@@ -65,11 +63,25 @@ export function HamburgerMenu() {
   const activePanel = useMeridianStore((state) => state.activePanel)
   const setMenuOpen = useMeridianStore((state) => state.setMenuOpen)
   const setActivePanel = useMeridianStore((state) => state.setActivePanel)
+  const setBriefOpen = useMeridianStore((state) => state.setBriefOpen)
 
   const close = () => {
     setMenuOpen(false)
     setActivePanel(null)
   }
+
+  const openItem = (panel: Panel | 'brief') => {
+    if (panel === 'brief') {
+      // The Brief is a centered modal — close the menu and open it.
+      close()
+      setBriefOpen(true)
+      return
+    }
+    setActivePanel(panel)
+  }
+
+  // activePanel never holds 'brief' (Brief opens as a modal), so this is a Panel.
+  const slidePanel = activePanel === 'brief' ? null : activePanel
 
   return (
     <>
@@ -102,7 +114,7 @@ export function HamburgerMenu() {
             >
               <div className="mb-5 flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  {activePanel && (
+                  {slidePanel && (
                     <button
                       type="button"
                       aria-label="Back"
@@ -113,7 +125,7 @@ export function HamburgerMenu() {
                     </button>
                   )}
                   <h2 className="text-base font-semibold text-white">
-                    {activePanel ? PANEL_TITLES[activePanel] : 'Menu'}
+                    {slidePanel ? PANEL_TITLES[slidePanel] : 'Menu'}
                   </h2>
                 </div>
                 <button
@@ -126,15 +138,15 @@ export function HamburgerMenu() {
                 </button>
               </div>
 
-              {activePanel ? (
-                <PanelContent panel={activePanel} />
+              {slidePanel ? (
+                <PanelContent panel={slidePanel} />
               ) : (
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                   {MENU_ITEMS.map((item) => (
                     <button
                       key={item.panel}
                       type="button"
-                      onClick={() => setActivePanel(item.panel)}
+                      onClick={() => openItem(item.panel)}
                       className="flex flex-col items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-5 text-white/80 transition-colors hover:bg-white/10 hover:text-white"
                     >
                       <item.icon size={22} />
