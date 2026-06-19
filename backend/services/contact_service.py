@@ -186,19 +186,17 @@ async def build_contact_graph(account_id: int, db: AsyncSession) -> dict:
 
     upserted = 0
     for entry, embedding in zip(contact_list, embeddings):
-        literal = None
-        if embedding is not None and len(embedding) == expected_dim:
-            literal = vector_service.to_pgvector(embedding)
+        # Step 1: upsert all scalar fields — asyncpg cannot infer the type of a
+        # pgvector parameter in a CASE expression, so embedding is handled separately.
         await db.execute(
             text(
                 """
                 INSERT INTO contacts
                     (email_address, display_name, email_count, sent_count,
-                     received_count, first_contacted, last_contacted, topics, embedding)
+                     received_count, first_contacted, last_contacted, topics)
                 VALUES
                     (:email_address, :display_name, :email_count, :sent_count,
-                     :received_count, :first_contacted, :last_contacted, :topics,
-                     CASE WHEN :embedding IS NULL THEN NULL ELSE CAST(:embedding AS vector) END)
+                     :received_count, :first_contacted, :last_contacted, :topics)
                 ON CONFLICT (email_address) DO UPDATE SET
                     display_name = COALESCE(EXCLUDED.display_name, contacts.display_name),
                     email_count = EXCLUDED.email_count,
@@ -206,8 +204,7 @@ async def build_contact_graph(account_id: int, db: AsyncSession) -> dict:
                     received_count = EXCLUDED.received_count,
                     first_contacted = EXCLUDED.first_contacted,
                     last_contacted = EXCLUDED.last_contacted,
-                    topics = EXCLUDED.topics,
-                    embedding = EXCLUDED.embedding
+                    topics = EXCLUDED.topics
                 """
             ),
             {
@@ -219,11 +216,23 @@ async def build_contact_graph(account_id: int, db: AsyncSession) -> dict:
                 "first_contacted": entry["first_contacted"],
                 "last_contacted": entry["last_contacted"],
                 "topics": entry["topics"],
-                "embedding": literal,
             },
         )
+        await db.commit()
+
+        # Step 2: update embedding separately so the ::vector cast is unambiguous.
+        if embedding is not None and len(embedding) == expected_dim:
+            literal = vector_service.to_pgvector(embedding)
+            await db.execute(
+                text(
+                    "UPDATE contacts SET embedding = :embedding::vector "
+                    "WHERE email_address = :email_address"
+                ),
+                {"embedding": literal, "email_address": entry["email_address"]},
+            )
+            await db.commit()
+
         upserted += 1
-    await db.commit()
 
     logger.info("Built contact graph for account %s: %s contacts", account_id, upserted)
     return {"contacts": upserted}
