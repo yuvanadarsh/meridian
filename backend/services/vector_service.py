@@ -128,18 +128,83 @@ async def run_vectorize_background(account_id: int) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def get_email_context(query: str, db: AsyncSession, limit: int = 10) -> str:
-    """Return the most relevant keep/archive emails for ``query`` as prompt context.
+async def get_email_context(query: str, db: AsyncSession, limit: int = 5) -> str:
+    """Return relevant email *conversations* for ``query`` as prompt context.
 
-    Embeds the query with the same VoyageAI model used to vectorize emails, then
-    runs a pgvector cosine-similarity search. If fewer than 3 results come back
-    (low similarity across the board), falls back to an ILIKE keyword search on
-    subject and body. Returns an empty string on any failure — chat should never
-    break over missing context.
+    Thread-aware: retrieves whole conversations from ``email_threads`` (built via
+    ``thread_service``) so Claude sees full back-and-forth context instead of
+    isolated messages. Falls back to message-level retrieval only when no threads
+    have been built yet. Returns an empty string on any failure — chat should
+    never break over missing context.
     """
     if not settings.voyage_api_key:
         return ""
 
+    # Only fall back to message-level search if the account hasn't built threads.
+    thread_count = await db.execute(text("SELECT COUNT(*) FROM email_threads"))
+    if (thread_count.scalar() or 0) > 0:
+        return await _thread_email_context(query, db, limit=limit)
+    return await _message_level_email_context(query, db, limit=max(limit, 10))
+
+
+async def _thread_email_context(query: str, db: AsyncSession, limit: int = 5) -> str:
+    """Retrieve the most relevant email threads and their recent messages."""
+    try:
+        query_embedding = (await embed_texts([query]))[0]
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to embed chat query for thread retrieval")
+        return ""
+
+    thread_result = await db.execute(
+        text(
+            """
+            SELECT thread_id, subject, participants, message_count, last_message_at
+            FROM email_threads
+            WHERE embedding IS NOT NULL
+            ORDER BY embedding <=> CAST(:embedding AS vector)
+            LIMIT :limit
+            """
+        ),
+        {"embedding": to_pgvector(query_embedding), "limit": limit},
+    )
+    threads = thread_result.fetchall()
+    if not threads:
+        return ""
+
+    context = "Relevant email conversations:\n\n"
+    for thread in threads:
+        messages = await db.execute(
+            text(
+                """
+                SELECT from_address, body_text, received_at
+                FROM emails
+                WHERE thread_id = :thread_id
+                ORDER BY received_at ASC
+                LIMIT 3
+                """
+            ),
+            {"thread_id": thread.thread_id},
+        )
+        msgs = messages.fetchall()
+
+        context += f"Thread: {thread.subject}\n"
+        context += f"Participants: {', '.join(thread.participants or [])}\n"
+        context += f"Messages: {thread.message_count}\n"
+        for msg in msgs:
+            when = msg.received_at.strftime("%b %d") if msg.received_at else ""
+            context += f"\n[{when}] {msg.from_address}:\n"
+            context += f"{(msg.body_text or '')[:300]}\n"
+        context += "\n---\n\n"
+
+    return context.rstrip()
+
+
+async def _message_level_email_context(query: str, db: AsyncSession, limit: int = 10) -> str:
+    """Legacy per-message retrieval — used before threads are built.
+
+    Embeds the query, runs a pgvector cosine search, and falls back to an ILIKE
+    keyword search when too few matches come back.
+    """
     try:
         query_embedding = (await embed_texts([query]))[0]
     except Exception:  # noqa: BLE001
