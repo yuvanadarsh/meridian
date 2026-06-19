@@ -26,6 +26,7 @@ from services import (
     draft_service,
     gmail_service,
     obsidian_service,
+    provider_service,
     settings_service,
     vector_service,
 )
@@ -339,10 +340,10 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
     messages.append({"role": "user", "content": payload.message})
 
     try:
-        reply, usage = await claude_service.chat(system=system, messages=messages)
+        reply, usage = await provider_service.call_chat(db, system=system, messages=messages)
     except Exception as exc:  # noqa: BLE001
-        logger.exception("Claude chat request failed")
-        raise HTTPException(status_code=502, detail=f"Claude request failed: {exc}") from exc
+        logger.exception("Chat request to AI provider failed")
+        raise HTTPException(status_code=502, detail=f"AI request failed: {exc}") from exc
 
     # If Claude emitted an action token (e.g. drafting an email), perform it and
     # replace the raw reply with a clean confirmation before persisting/returning.

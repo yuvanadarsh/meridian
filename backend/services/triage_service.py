@@ -13,7 +13,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.database import AsyncSessionLocal
-from services import claude_service, gmail_service
+from services import gmail_service, provider_service
 
 logger = logging.getLogger(__name__)
 
@@ -41,9 +41,8 @@ Labels: {labels}
 Reply with only the single word: trash, archive, or keep"""
 
 
-async def classify_email(email: dict) -> str:
+async def classify_email(email: dict, db: AsyncSession) -> str:
     """Classify a single email. Defaults to 'keep' on any ambiguity (never auto-trash)."""
-    client = claude_service.get_client()
     prompt = PROMPT_TEMPLATE.format(
         from_address=email.get("from_address") or "",
         subject=email.get("subject") or "",
@@ -51,13 +50,7 @@ async def classify_email(email: dict) -> str:
         labels=", ".join(email.get("labels") or []),
     )
 
-    message = await client.messages.create(
-        model=claude_service.MODEL,
-        max_tokens=10,
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    raw = claude_service.extract_text(message).lower()
+    raw = (await provider_service.call_classify(db, prompt, max_tokens=10)).lower()
     for status in ("trash", "archive", "keep"):
         if status in raw:
             return status
@@ -73,8 +66,8 @@ def _extract_json_array(raw: str) -> str:
     return raw[start : end + 1]
 
 
-async def classify_and_summarize_batch(emails: list[dict]) -> list[dict]:
-    """Classify AND summarize a batch of emails in a single Claude call.
+async def classify_and_summarize_batch(emails: list[dict], db: AsyncSession) -> list[dict]:
+    """Classify AND summarize a batch of emails in a single provider call.
 
     One call per batch (rather than per email) keeps the sweep fast. Returns a
     list aligned with ``emails``, each ``{"status", "summary"}``. Any failure or
@@ -109,13 +102,8 @@ async def classify_and_summarize_batch(emails: list[dict]) -> list[dict]:
 
     fallback = [{"status": "keep", "summary": ""} for _ in emails]
     try:
-        client = claude_service.get_client()
-        message = await client.messages.create(
-            model=claude_service.MODEL,
-            max_tokens=3000,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        data = json.loads(_extract_json_array(claude_service.extract_text(message)))
+        reply = await provider_service.call_classify(db, prompt, max_tokens=3000)
+        data = json.loads(_extract_json_array(reply))
     except Exception as exc:  # noqa: BLE001 — keep the sweep going past a bad batch
         logger.error("Batch triage failed for %s emails: %s", len(emails), exc)
         return fallback
@@ -163,7 +151,7 @@ async def triage_account(account_id: int, db: AsyncSession) -> dict:
     async def classify_one(email: dict) -> tuple[int, str]:
         async with semaphore:
             try:
-                status = await classify_email(email)
+                status = await classify_email(email, db)
             except Exception as exc:  # noqa: BLE001 — keep going past one failure
                 logger.error("Failed to classify email %s: %s", email["id"], exc)
                 status = "keep"
