@@ -44,6 +44,10 @@ export function ConnectionsPanel() {
   const [obsidianProgress, setObsidianProgress] = useState<
     Record<number, { processed: number; total: number; done: boolean }>
   >({})
+  const [exportingContacts, setExportingContacts] = useState(false)
+  const [contactsProgress, setContactsProgress] = useState<{
+    processed: number; total: number; done: boolean
+  } | null>(null)
 
   // Thread build state per account: null = unknown, {processed,total} = known
   const [threadCounts, setThreadCounts] = useState<Record<number, { processed: number; total: number }>>({})
@@ -194,6 +198,34 @@ export function ConnectionsPanel() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Obsidian export failed')
       setExportingObsidianId(null)
+    }
+  }
+
+  const exportContactsToObsidian = async () => {
+    setExportingContacts(true)
+    setContactsProgress({ processed: 0, total: 0, done: false })
+    try {
+      await api.exportContactsToObsidian()
+      const poll = setInterval(async () => {
+        try {
+          const progress = await api.getContactsObsidianExportProgress()
+          setContactsProgress({
+            processed: progress.processed,
+            total: progress.total,
+            done: progress.done ?? false,
+          })
+          if (progress.done) {
+            clearInterval(poll)
+            setExportingContacts(false)
+          }
+        } catch {
+          clearInterval(poll)
+          setExportingContacts(false)
+        }
+      }, 2000)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Contacts export failed')
+      setExportingContacts(false)
     }
   }
 
@@ -459,6 +491,22 @@ export function ConnectionsPanel() {
       )}
 
       {accounts.length > 0 && <ContactsSection accounts={accounts} />}
+
+      {accounts.length > 0 && (
+        <button
+          type="button"
+          disabled={exportingContacts}
+          onClick={() => void exportContactsToObsidian()}
+          className="flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/60 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-40"
+        >
+          <HiOutlineDocumentText size={16} />
+          {exportingContacts && contactsProgress
+            ? `Writing contacts... ${contactsProgress.processed}/${contactsProgress.total}`
+            : contactsProgress?.done
+              ? '✓ Contacts in Obsidian'
+              : 'Export contacts to Obsidian'}
+        </button>
+      )}
     </div>
   )
 }

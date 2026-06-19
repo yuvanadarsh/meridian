@@ -1,12 +1,13 @@
-"""Contact intelligence routes: build the contact graph and query contacts."""
+"""Contact intelligence routes: build the contact graph, query contacts, and Obsidian export."""
 
+import json
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.database import get_db
-from services import contact_service, gmail_service
+from services import contact_service, gmail_service, obsidian_service, settings_service
 
 logger = logging.getLogger(__name__)
 
@@ -45,3 +46,22 @@ async def search_contacts(
 ):
     """Search contacts by name or email."""
     return {"contacts": await contact_service.search_contacts(db, q)}
+
+
+@router.post("/export-to-obsidian")
+async def export_contacts_to_obsidian(background_tasks: BackgroundTasks):
+    """Write all contacts to the Obsidian vault as linked profile notes."""
+    background_tasks.add_task(obsidian_service.export_contacts_to_obsidian_background)
+    return {"status": "started"}
+
+
+@router.get("/obsidian-export/progress")
+async def contacts_obsidian_export_progress(db: AsyncSession = Depends(get_db)):
+    """Return the Obsidian contacts export progress."""
+    raw = await settings_service.get_value(db, "obsidian_contacts_export_progress")
+    if not raw:
+        return {"processed": 0, "total": 0, "done": False}
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return {"processed": 0, "total": 0, "done": False}
