@@ -5,11 +5,18 @@ import { AIProvidersSection } from './AIProvidersSection'
 import { EmbeddingsSection } from './EmbeddingsSection'
 
 type Tone = 'concise' | 'moderate' | 'conversational'
+type TriageMode = 'aggressive' | 'normal' | 'safe'
 
 const TONES: { value: Tone; label: string }[] = [
   { value: 'concise', label: 'Concise' },
   { value: 'moderate', label: 'Moderate' },
   { value: 'conversational', label: 'Conversational' },
+]
+
+const TRIAGE_MODES: { value: TriageMode; label: string }[] = [
+  { value: 'aggressive', label: 'Aggressive' },
+  { value: 'normal', label: 'Normal' },
+  { value: 'safe', label: 'Safe' },
 ]
 
 // Half-hour options for the daily digest time picker.
@@ -39,6 +46,7 @@ export function SettingsPanel() {
   const [timezone, setTimezone] = useState('America/New_York')
   const [agentName, setAgentName] = useState('Meridian')
   const [voiceEnabled, setVoiceEnabled] = useState(true)
+  const [triageMode, setTriageMode] = useState<TriageMode>('normal')
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -52,6 +60,7 @@ export function SettingsPanel() {
         if (settings.timezone) setTimezone(settings.timezone)
         if (settings.agent_name) setAgentName(settings.agent_name)
         if (settings.voice_enabled) setVoiceEnabled(settings.voice_enabled === 'true')
+        if (settings.triage_mode) setTriageMode(settings.triage_mode as TriageMode)
       })
       .catch(() => {
         // Keep defaults on failure — the panel stays usable.
@@ -90,6 +99,30 @@ export function SettingsPanel() {
               }}
               className={`rounded-lg px-3 py-1.5 text-xs transition-colors ${
                 tone === option.value
+                  ? 'bg-white/15 text-white'
+                  : 'text-white/50 hover:text-white/80'
+              }`}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Triage mode */}
+      <div className="flex flex-col gap-2">
+        <span className="text-sm text-white/70">Triage mode</span>
+        <div className="grid grid-cols-3 gap-1 rounded-xl border border-white/10 bg-white/5 p-1">
+          {TRIAGE_MODES.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => {
+                setTriageMode(option.value)
+                persist('triage_mode', option.value)
+              }}
+              className={`rounded-lg px-3 py-1.5 text-xs transition-colors ${
+                triageMode === option.value
                   ? 'bg-white/15 text-white'
                   : 'text-white/50 hover:text-white/80'
               }`}

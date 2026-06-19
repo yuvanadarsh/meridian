@@ -13,6 +13,8 @@ DEFAULTS = {
     "digest_schedule": "08:00",
     "voice_enabled": "true",
     "agent_name": "Meridian",
+    "triage_mode": "normal",
+    "embedding_model": "voyage-3-lite",
 }
 
 

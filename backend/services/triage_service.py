@@ -13,12 +13,34 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.database import AsyncSessionLocal
-from services import gmail_service, provider_service
+from services import gmail_service, provider_service, settings_service
 
 logger = logging.getLogger(__name__)
 
 VALID_STATUSES = {"trash", "archive", "keep"}
 TRIAGE_BATCH_SIZE = 50
+
+# Extra instruction injected into the triage prompt based on the user's chosen
+# aggressiveness. 'normal' keeps the balanced default (no extra instruction).
+_TRIAGE_MODE_INSTRUCTIONS = {
+    "aggressive": (
+        "Aggressiveness: when in doubt, classify as trash. Newsletters, "
+        "notifications, and automated emails should always be trash. Only keep "
+        "emails that require direct personal action."
+    ),
+    "safe": (
+        "Aggressiveness: when in doubt, classify as keep. Only trash obvious spam, "
+        "OTPs, and confirmed promotional emails. Archive everything else."
+    ),
+    "normal": "",
+}
+
+
+async def _mode_instruction(db: AsyncSession) -> str:
+    """Return the triage-mode instruction line to inject, or '' for normal."""
+    mode = await settings_service.get_value(db, "triage_mode")
+    instruction = _TRIAGE_MODE_INSTRUCTIONS.get(mode, "")
+    return f"\n{instruction}\n" if instruction else ""
 # Cap concurrent Claude calls so a large mailbox doesn't trip rate limits.
 MAX_CONCURRENCY = 5
 
@@ -49,6 +71,7 @@ async def classify_email(email: dict, db: AsyncSession) -> str:
         snippet=email.get("snippet") or "",
         labels=", ".join(email.get("labels") or []),
     )
+    prompt += await _mode_instruction(db)
 
     raw = (await provider_service.call_classify(db, prompt, max_tokens=10)).lower()
     for status in ("trash", "archive", "keep"):
@@ -96,8 +119,10 @@ async def classify_and_summarize_batch(emails: list[dict], db: AsyncSession) -> 
         "- archive: past human-to-human conversations, receipts, shipping notices, "
         "GitHub/GitLab notifications, newsletters, threads already replied to\n"
         "- keep: needs a response or action, contracts/agreements/legal documents, "
-        "calendar invitations, direct personal correspondence\n\n"
-        "Emails:\n" + "\n".join(lines)
+        "calendar invitations, direct personal correspondence\n"
+        + await _mode_instruction(db)
+        + "\nEmails:\n"
+        + "\n".join(lines)
     )
 
     fallback = [{"status": "keep", "summary": ""} for _ in emails]
