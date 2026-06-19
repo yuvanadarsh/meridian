@@ -258,6 +258,8 @@ export const api = {
     }),
   getThreadsProgress: (accountId: number) =>
     request<{ processed: number; total: number }>(`/gmail/threads/build/progress/${accountId}`),
+  getThreadsCount: (accountId: number) =>
+    request<{ processed: number; total: number }>(`/gmail/threads/count/${accountId}`),
 
   // Contacts
   buildContactGraph: (accountId: number) =>
