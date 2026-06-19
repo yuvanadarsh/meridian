@@ -1,9 +1,7 @@
-"""Gmail routes: OAuth, account management, sweep, and triage.
-
-OAuth lives here now; the sweep and triage routes are added in later steps.
-"""
+"""Gmail routes: OAuth, account management, sweep, and triage."""
 
 import asyncio
+import json
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -13,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import get_settings
 from db.database import get_db
 from models.gmail import AccountUpdate, BulkTriageRequest, SweepOptions, TriageApproval
-from services import gmail_service, thread_service, triage_service, vector_service
+from services import gmail_service, obsidian_service, thread_service, triage_service, vector_service
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -279,3 +277,32 @@ async def build_threads_progress(account_id: int, db: AsyncSession = Depends(get
 async def thread_count(account_id: int, db: AsyncSession = Depends(get_db)):
     """Return ``{processed, total}`` — built threads vs distinct thread_ids (alias of build progress)."""
     return await thread_service.build_progress(account_id, db)
+
+
+@router.post("/threads/export-to-obsidian/{account_id}")
+async def export_threads_to_obsidian(
+    account_id: int,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    """Write all email threads for an account to the Obsidian vault as linked notes."""
+    accounts = await gmail_service.list_accounts(db)
+    if not any(account["id"] == account_id for account in accounts):
+        raise HTTPException(status_code=404, detail="Account not found")
+    background_tasks.add_task(obsidian_service.export_threads_to_obsidian_background, account_id)
+    return {"status": "started", "account_id": account_id}
+
+
+@router.get("/threads/obsidian-export/progress/{account_id}")
+async def obsidian_export_progress(account_id: int, db: AsyncSession = Depends(get_db)):
+    """Return the Obsidian thread export progress for an account."""
+    from services import settings_service
+
+    progress_key = f"obsidian_export_progress_{account_id}"
+    raw = await settings_service.get_value(db, progress_key)
+    if not raw:
+        return {"processed": 0, "total": 0, "done": False}
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return {"processed": 0, "total": 0, "done": False}

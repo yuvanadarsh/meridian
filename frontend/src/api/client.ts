@@ -328,4 +328,21 @@ export const api = {
     request<SuperchargeImport>(`/supercharge/progress/${importId}`),
   getSuperchargeImports: () =>
     request<{ imports: SuperchargeImport[] }>('/supercharge'),
+
+  // Obsidian export
+  exportThreadsToObsidian: (accountId: number) =>
+    request<{ status: string; account_id: number }>(
+      `/gmail/threads/export-to-obsidian/${accountId}`,
+      { method: 'POST' },
+    ),
+  getObsidianExportProgress: (accountId: number) =>
+    request<{ processed: number; total: number; done?: boolean }>(
+      `/gmail/threads/obsidian-export/progress/${accountId}`,
+    ),
+  exportContactsToObsidian: () =>
+    request<{ status: string }>('/contacts/export-to-obsidian', { method: 'POST' }),
+  getContactsObsidianExportProgress: () =>
+    request<{ processed: number; total: number; done?: boolean }>(
+      '/contacts/obsidian-export/progress',
+    ),
 }
