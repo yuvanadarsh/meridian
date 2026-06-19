@@ -17,6 +17,9 @@ settings = get_settings()
 
 # Project standard model. Defined once so every caller stays in sync.
 MODEL = "claude-sonnet-4-6"
+# Cheaper/faster model for high-volume classification and extraction work
+# (triage topics, contact topics) where Sonnet would be overkill.
+HAIKU_MODEL = "claude-haiku-4-5-20251001"
 
 
 def build_system_prompt(
@@ -24,6 +27,7 @@ def build_system_prompt(
     calendar_context: str = "",
     obsidian_context: str = "",
     email_context: str = "",
+    contact_context: str = "",
     accounts: list[dict] | None = None,
     tone: str = "concise",
     today: str | None = None,
@@ -59,7 +63,7 @@ def build_system_prompt(
     prompt += "\n\n" + _action_protocol(accounts or [], include_draft=allow_draft)
     if email_context:
         prompt += "\n\nRELEVANT EMAILS:\n" + email_context
-    for section in (calendar_context, obsidian_context):
+    for section in (contact_context, calendar_context, obsidian_context):
         if section:
             prompt += "\n\n" + section
     return prompt
