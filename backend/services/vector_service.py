@@ -147,27 +147,66 @@ async def get_email_context(query: str, db: AsyncSession, limit: int = 5) -> str
     return await _message_level_email_context(query, db, limit=max(limit, 10))
 
 
-async def _thread_email_context(query: str, db: AsyncSession, limit: int = 5) -> str:
-    """Retrieve the most relevant email threads and their recent messages."""
+async def hybrid_email_search(query: str, db: AsyncSession, limit: int = 5) -> list:
+    """Rank email threads by Reciprocal Rank Fusion of vector + full-text search.
+
+    Combines pgvector cosine similarity with Postgres full-text (``search_vector``)
+    ranking. RRF (``1 / (k + rank)``, k=60) fuses the two rankings so a thread that
+    scores well on either signal surfaces — far more robust than vector-only when
+    the query shares exact terms (names, subjects) with the email. Returns SQLAlchemy
+    rows with ``thread_id, subject, participants, message_count, last_message_at``.
+    """
     try:
         query_embedding = (await embed_texts([query]))[0]
     except Exception:  # noqa: BLE001
         logger.exception("Failed to embed chat query for thread retrieval")
-        return ""
+        return []
 
-    thread_result = await db.execute(
+    result = await db.execute(
         text(
             """
-            SELECT thread_id, subject, participants, message_count, last_message_at
-            FROM email_threads
-            WHERE embedding IS NOT NULL
-            ORDER BY embedding <=> CAST(:embedding AS vector)
-            LIMIT :limit
+            WITH vector_results AS (
+                SELECT thread_id, subject, participants, message_count, last_message_at,
+                       ROW_NUMBER() OVER (ORDER BY embedding <=> CAST(:embedding AS vector)) AS vector_rank
+                FROM email_threads
+                WHERE embedding IS NOT NULL
+                LIMIT 20
+            ),
+            text_results AS (
+                SELECT thread_id, subject, participants, message_count, last_message_at,
+                       ROW_NUMBER() OVER (ORDER BY ts_rank(search_vector, query) DESC) AS text_rank
+                FROM email_threads,
+                     plainto_tsquery('english', :query_text) query
+                WHERE search_vector @@ query
+                LIMIT 20
+            ),
+            combined AS (
+                SELECT
+                    COALESCE(v.thread_id, t.thread_id) AS thread_id,
+                    COALESCE(v.subject, t.subject) AS subject,
+                    COALESCE(v.participants, t.participants) AS participants,
+                    COALESCE(v.message_count, t.message_count) AS message_count,
+                    COALESCE(v.last_message_at, t.last_message_at) AS last_message_at,
+                    (1.0 / (60 + COALESCE(v.vector_rank, 1000))) +
+                    (1.0 / (60 + COALESCE(t.text_rank, 1000))) AS rrf_score
+                FROM vector_results v
+                FULL OUTER JOIN text_results t USING (thread_id)
+            )
+            SELECT * FROM combined ORDER BY rrf_score DESC LIMIT :limit
             """
         ),
-        {"embedding": to_pgvector(query_embedding), "limit": limit},
+        {
+            "embedding": to_pgvector(query_embedding),
+            "query_text": query,
+            "limit": limit,
+        },
     )
-    threads = thread_result.fetchall()
+    return result.fetchall()
+
+
+async def _thread_email_context(query: str, db: AsyncSession, limit: int = 5) -> str:
+    """Retrieve the most relevant email threads and their recent messages."""
+    threads = await hybrid_email_search(query, db, limit=limit)
     if not threads:
         return ""
 
