@@ -393,16 +393,19 @@ async def get_obsidian_email_context(query: str, db: AsyncSession, limit: int = 
     Filters to notes under ``{vault}/Emails/`` or ``{vault}/Contacts/`` so the
     result is richer and more specific than the general ``get_obsidian_context``.
     """
-    if not settings.voyage_api_key:
-        return ""
+    from services import vector_service
     from services.vector_service import to_pgvector
+
+    config = await vector_service.get_embedding_config(db)
+    if config["provider"] == "voyage" and not settings.voyage_api_key:
+        return ""
 
     vault = vault_path()
     if vault is None:
         return ""
 
     try:
-        query_embedding = (await _embed_texts_for_obsidian([query]))[0]
+        query_embedding = (await vector_service.embed_texts([query], db))[0]
     except Exception:
         logger.exception("Failed to embed query for Obsidian email context")
         return ""
