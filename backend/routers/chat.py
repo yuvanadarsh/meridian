@@ -70,6 +70,11 @@ async def _get_context_tiered(
     """
     # Always try Obsidian email/contact notes first
     obsidian_email_ctx = await obsidian_service.get_obsidian_email_context(message, db, limit=5)
+    logger.info(
+        "Obsidian email context returned %d chars for query: %s",
+        len(obsidian_email_ctx),
+        message[:50],
+    )
 
     if tier == 1:
         if obsidian_email_ctx:
@@ -130,12 +135,14 @@ async def _get_context_tiered(
             except Exception:
                 logger.exception("Tier 2 Obsidian write failed for thread %s", thread_id)
 
-            # Build context from full messages
-            ctx = "Full email thread from Gmail:\n\n"
+            # Build context from full messages — inject directly; don't wait for Obsidian vectorization
+            ctx = "Full email thread (fetched directly from Gmail):\n\n"
             for msg in full_messages:
+                received = msg.get("received_at")
+                date_str = received.strftime("%B %d, %Y") if isinstance(received, datetime) else ""
                 ctx += f"From: {msg.get('from_address', '')}\n"
-                ctx += f"Date: {msg.get('received_at', '')}\n"
-                ctx += f"Content: {(msg.get('body_text') or '')[:1000]}\n\n"
+                ctx += f"Date: {date_str}\n"
+                ctx += f"{(msg.get('body_text') or '')[:800]}\n\n---\n\n"
             return ctx.rstrip(), "gmail_api"
     except Exception:
         logger.exception("Tier 2 retrieval failed")
