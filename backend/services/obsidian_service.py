@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import re
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -488,26 +489,47 @@ async def write_thread_to_vault(
     if vault is None:
         return ""
 
-    # Determine primary contact (first non-user participant)
-    contact_email = next(
-        (p for p in participants if p not in user_emails),
-        participants[0] if participants else "Unknown",
-    )
-
-    # Look up display name from contacts table
+    # Fetch ALL connected account emails so we correctly exclude every address
+    # the user owns — not just the single account that owns this thread.
     try:
-        contact_result = await db.execute(
-            text("SELECT display_name FROM contacts WHERE email_address = :email"),
-            {"email": contact_email},
-        )
-        contact_row = contact_result.fetchone()
-        contact_name = (
-            contact_row.display_name
-            if contact_row and contact_row.display_name
-            else contact_email.split("@")[0]
-        )
+        all_accounts_result = await db.execute(text("SELECT email FROM gmail_accounts"))
+        all_user_emails = [row.email for row in all_accounts_result.fetchall()]
     except Exception:
-        contact_name = contact_email.split("@")[0]
+        all_user_emails = list(user_emails)
+
+    # Username prefixes (e.g. "yuvanadarshj") catch address variants like
+    # "yuvanadarshj+filter@gmail.com" that simple equality would miss.
+    user_usernames = [e.split("@")[0].lower() for e in all_user_emails]
+
+    contact_email: str | None = None
+    for participant in participants:
+        p_lower = participant.lower()
+        if any(ue.lower() in p_lower for ue in all_user_emails):
+            continue
+        if any(uu in p_lower.split("@")[0] for uu in user_usernames):
+            continue
+        contact_email = participant
+        break
+
+    # Self-sent thread: file under "Self" rather than the user's own name.
+    if contact_email is None:
+        contact_email = "self"
+        contact_name = "Self"
+    else:
+        # Look up display name from contacts table
+        try:
+            contact_result = await db.execute(
+                text("SELECT display_name FROM contacts WHERE email_address = :email"),
+                {"email": contact_email},
+            )
+            contact_row = contact_result.fetchone()
+            contact_name = (
+                contact_row.display_name
+                if contact_row and contact_row.display_name
+                else contact_email.split("@")[0]
+            )
+        except Exception:
+            contact_name = contact_email.split("@")[0]
 
     # Generate AI summary
     messages_text = "\n\n".join([
@@ -516,9 +538,14 @@ async def write_thread_to_vault(
     ])
     summary = await generate_thread_summary(subject, messages_text)
 
-    # Extract wikilinks, ensuring contact is always first
+    # Extract wikilinks, ensuring contact is always first; strip any link that
+    # refers to the user themselves (e.g. "[[Yuvan yuvanadarshj]]").
     wikilinks = await extract_wikilinks(summary + " " + subject)
-    if contact_name not in wikilinks:
+    wikilinks = [
+        w for w in wikilinks
+        if not any(uu in w.lower() for uu in user_usernames if len(uu) > 2)
+    ]
+    if contact_name not in wikilinks and contact_name != "Self":
         wikilinks.insert(0, contact_name)
 
     safe_subject = (
@@ -557,9 +584,21 @@ async def write_thread_to_vault(
 
 
 async def export_threads_to_obsidian_background(account_id: int) -> None:
-    """Write all email threads for an account to the Obsidian vault (background task)."""
+    """Write all email threads for an account to the Obsidian vault (background task).
+
+    Clears the ``Emails/`` directory first so stale notes from a previous export
+    (e.g. threads filed under the wrong contact name) don't persist.
+    """
     from db.database import AsyncSessionLocal
     from services import settings_service
+
+    # Wipe the Emails/ subtree so re-exports always start from a clean slate.
+    emails_dir = vault_path()
+    if emails_dir is not None:
+        emails_dir = emails_dir / "Emails"
+        if emails_dir.exists():
+            await asyncio.to_thread(shutil.rmtree, str(emails_dir))
+            logger.info("Cleared Emails/ directory for clean re-export")
 
     async with AsyncSessionLocal() as db:
         accounts_result = await db.execute(
