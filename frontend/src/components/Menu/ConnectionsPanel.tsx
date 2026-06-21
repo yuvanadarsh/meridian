@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { FiCheck, FiPlus, FiTrash2, FiX } from 'react-icons/fi'
-import { HiChevronDown, HiOutlineCalendar, HiOutlineCircleStack } from 'react-icons/hi2'
+import { HiChevronDown, HiOutlineCalendar, HiOutlineCircleStack, HiOutlineDocumentText } from 'react-icons/hi2'
 
 import { api } from '../../api/client'
 import type { GmailAccount } from '../../api/client'
@@ -40,6 +40,14 @@ export function ConnectionsPanel() {
   const [newLabel, setNewLabel] = useState('')
   const [openAccordionId, setOpenAccordionId] = useState<number | null>(null)
   const [syncingId, setSyncingId] = useState<number | null>(null)
+  const [exportingObsidianId, setExportingObsidianId] = useState<number | null>(null)
+  const [obsidianProgress, setObsidianProgress] = useState<
+    Record<number, { processed: number; total: number; done: boolean }>
+  >({})
+  const [exportingContacts, setExportingContacts] = useState(false)
+  const [contactsProgress, setContactsProgress] = useState<{
+    processed: number; total: number; done: boolean
+  } | null>(null)
 
   // Thread build state per account: null = unknown, {processed,total} = known
   const [threadCounts, setThreadCounts] = useState<Record<number, { processed: number; total: number }>>({})
@@ -162,6 +170,65 @@ export function ConnectionsPanel() {
     }
   }
 
+  const exportToObsidian = async (accountId: number) => {
+    setExportingObsidianId(accountId)
+    setObsidianProgress((prev) => ({ ...prev, [accountId]: { processed: 0, total: 0, done: false } }))
+    try {
+      await api.exportThreadsToObsidian(accountId)
+      const poll = setInterval(async () => {
+        try {
+          const progress = await api.getObsidianExportProgress(accountId)
+          setObsidianProgress((prev) => ({
+            ...prev,
+            [accountId]: {
+              processed: progress.processed,
+              total: progress.total,
+              done: progress.done ?? false,
+            },
+          }))
+          if (progress.done) {
+            clearInterval(poll)
+            setExportingObsidianId(null)
+          }
+        } catch {
+          clearInterval(poll)
+          setExportingObsidianId(null)
+        }
+      }, 2000)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Obsidian export failed')
+      setExportingObsidianId(null)
+    }
+  }
+
+  const exportContactsToObsidian = async () => {
+    setExportingContacts(true)
+    setContactsProgress({ processed: 0, total: 0, done: false })
+    try {
+      await api.exportContactsToObsidian()
+      const poll = setInterval(async () => {
+        try {
+          const progress = await api.getContactsObsidianExportProgress()
+          setContactsProgress({
+            processed: progress.processed,
+            total: progress.total,
+            done: progress.done ?? false,
+          })
+          if (progress.done) {
+            clearInterval(poll)
+            setExportingContacts(false)
+          }
+        } catch {
+          clearInterval(poll)
+          setExportingContacts(false)
+        }
+      }, 2000)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Contacts export failed')
+      setExportingContacts(false)
+    }
+  }
+
   const toggleAccordion = (accountId: number) => {
     setOpenAccordionId((prev) => (prev === accountId ? null : accountId))
   }
@@ -256,6 +323,26 @@ export function ConnectionsPanel() {
                       Review triage
                     </button>
                   )}
+                  {synced && (() => {
+                    const prog = obsidianProgress[account.id]
+                    const isExporting = exportingObsidianId === account.id
+                    return (
+                      <button
+                        type="button"
+                        disabled={isExporting}
+                        onClick={() => void exportToObsidian(account.id)}
+                        className="flex items-center gap-1 rounded-full border border-white/15 px-3 py-1 text-xs text-white/80 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-40"
+                        title="Export email threads to Obsidian vault"
+                      >
+                        <HiOutlineDocumentText size={12} />
+                        {isExporting && prog
+                          ? `${prog.processed}/${prog.total}`
+                          : prog?.done
+                            ? '✓ In Obsidian'
+                            : 'Export to Obsidian'}
+                      </button>
+                    )
+                  })()}
                   <button
                     type="button"
                     onClick={() => sweep(account.id)}
@@ -404,6 +491,22 @@ export function ConnectionsPanel() {
       )}
 
       {accounts.length > 0 && <ContactsSection accounts={accounts} />}
+
+      {accounts.length > 0 && (
+        <button
+          type="button"
+          disabled={exportingContacts}
+          onClick={() => void exportContactsToObsidian()}
+          className="flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/60 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-40"
+        >
+          <HiOutlineDocumentText size={16} />
+          {exportingContacts && contactsProgress
+            ? `Writing contacts... ${contactsProgress.processed}/${contactsProgress.total}`
+            : contactsProgress?.done
+              ? '✓ Contacts in Obsidian'
+              : 'Export contacts to Obsidian'}
+        </button>
+      )}
     </div>
   )
 }

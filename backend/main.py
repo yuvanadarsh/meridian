@@ -128,6 +128,7 @@ app.add_middleware(
 
 app.include_router(health.router)
 app.include_router(gmail.router)
+app.include_router(contacts.router)
 app.include_router(calendar.router)
 app.include_router(chat.router)
 app.include_router(voice.router)

@@ -9,6 +9,37 @@
 
 Meridian is a local personal AI OS. It manages multiple Gmail accounts and Google Calendars, surfaces daily briefs (news, stocks, calendar digest), drafts emails in the user's voice using RAG over their email history, and supports voice interaction via push-to-talk (graduating to always-on wake word). All data is stored locally. The only external calls are Claude API, VoyageAI, ElevenLabs, and Google APIs.
 
+---
+
+## Memory Architecture
+
+Meridian uses a unified memory model:
+
+**OBSIDIAN VAULT (knowledge layer)**
+- `Daily/YYYY-MM-DD.md` — conversation logs, written after every chat exchange
+- `Emails/{Contact}/{Subject}.md` — email thread notes with AI summaries and wikilinks
+- `Contacts/{Name}.md` — contact profiles with relationship history and topic links
+- `AI Conversations/` — Supercharge imports
+
+**POSTGRESQL (operations layer)**
+- `emails`, `email_threads`, `contacts` tables — raw data and metadata
+- `obsidian_notes` table — vault file index with pgvector embeddings (512 dims, voyage-3-lite)
+- `gmail_accounts`, `calendar_events`, `drafts`, `user_settings` — operational state
+- All vector embeddings for RAG are generated FROM Obsidian note content
+
+**RETRIEVAL PIPELINE (tiered)**
+1. Search `obsidian_notes` WHERE `file_path LIKE 'Emails/%' OR 'Contacts/%'` (AI-summarized, wikilinked)
+2. Fall back to raw `email_threads` vector search if Obsidian has nothing relevant
+3. Tier 2 (triggered by "tell me more" / "go deeper" / "full details"): fetch complete thread from Gmail API, write enriched note to Obsidian, return full content
+
+**INGEST PIPELINE (per new account)**
+1. Sweep emails → PostgreSQL `emails` table
+2. Triage → user approves in UI
+3. Vectorize keep/archive emails → pgvector embeddings on `emails`
+4. Build threads → `email_threads` table populated
+5. Export to Obsidian → `Emails/` and `Contacts/` notes written
+6. Vault watcher ingests new notes → `obsidian_notes` table populated + vectorized
+
 **This is an open source project. Code must be clean, well-commented, and readable by strangers on GitHub. No personal details, usernames, local paths, or machine-specific references anywhere in the codebase.**
 
 ---
@@ -459,15 +490,17 @@ docs(readme): add setup, oauth, and local development instructions
 
 ## Phase Plan
 
-| Phase                   | Deliverable                                                                                 |
-| ----------------------- | ------------------------------------------------------------------------------------------- |
-| **1 — Foundation**      | Docker + FastAPI + Orb UI + one Gmail sweep + one Calendar + text chat + push-to-talk voice |
-| **Onboarding flow**     | Per-account: sweep → triage review → user approval → vectorize → calendar sync              |
-| **2 — All accounts**    | Repeat onboarding for accounts 2–4                                                          |
-| **3 — Intelligence**    | Email drafting in user's voice, news digest, stock watchlist, web search                    |
-| **4 — Always-on voice** | Wake word detection (future)                                                                |
+| Phase                        | Deliverable                                                                                 |
+| ---------------------------- | ------------------------------------------------------------------------------------------- |
+| **1 — Foundation**           | Docker + FastAPI + Orb UI + one Gmail sweep + one Calendar + text chat + push-to-talk voice |
+| **Onboarding flow**          | Per-account: sweep → triage review → user approval → vectorize → calendar sync              |
+| **2 — All accounts**         | Repeat onboarding for accounts 2–4                                                          |
+| **3 — Intelligence**         | Email drafting in user's voice, news digest, stock watchlist, web search                    |
+| **4 — Memory & intelligence**| Threading, hybrid search, contacts graph, multi-provider AI, scheduled digest               |
+| **5A — Memory unification**  | Email threads + contacts written to Obsidian; tiered RAG with Obsidian-first retrieval      |
+| **5B — Always-on voice**     | Wake word detection (future)                                                                |
 
-**Current phase: 1**
+**Current phase: 5A complete**
 
 ---
 

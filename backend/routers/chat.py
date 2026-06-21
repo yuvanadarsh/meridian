@@ -38,6 +38,16 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 
 HISTORY_LIMIT = 10
 
+# Phrases that indicate the user wants a full Gmail thread fetch (tier 2).
+_DEEP_PHRASES = (
+    "tell me more",
+    "go deeper",
+    "full details",
+    "complete thread",
+    "show me everything",
+    "read the full",
+)
+
 # Phrases that mean "read me my daily brief" instead of a normal chat turn.
 _DIGEST_TRIGGERS = (
     "digest",
@@ -47,6 +57,97 @@ _DIGEST_TRIGGERS = (
     "whats going on",
     "catch me up",
 )
+
+
+async def _get_context_tiered(
+    message: str, db: AsyncSession, tier: int = 1
+) -> tuple[str, str]:
+    """Return (context_text, source_label) using a tiered retrieval strategy.
+
+    Tier 1 searches Obsidian Email/Contact notes first, falls back to raw email
+    DB if nothing found. Tier 2 fetches the full thread from Gmail API, writes
+    an enriched note to Obsidian, and returns the complete content.
+    """
+    # Always try Obsidian email/contact notes first
+    obsidian_email_ctx = await obsidian_service.get_obsidian_email_context(message, db, limit=5)
+    logger.info(
+        "Obsidian email context returned %d chars for query: %s",
+        len(obsidian_email_ctx),
+        message[:50],
+    )
+
+    if tier == 1:
+        if obsidian_email_ctx:
+            return obsidian_email_ctx, "obsidian"
+        email_ctx = await vector_service.get_email_context(message, db, limit=5)
+        if email_ctx:
+            return email_ctx, "email_db"
+        return "", "none"
+
+    # Tier 2: find the most relevant thread and fetch it from Gmail
+    try:
+        query_embedding = (await vector_service.embed_texts([message]))[0]
+        from services.vector_service import to_pgvector
+
+        thread_result = await db.execute(
+            text(
+                """
+                SELECT thread_id, account_id, subject, participants, message_count, last_message_at
+                FROM email_threads
+                WHERE embedding IS NOT NULL
+                ORDER BY embedding <=> CAST(:embedding AS vector)
+                LIMIT 1
+                """
+            ),
+            {"embedding": to_pgvector(query_embedding)},
+        )
+        thread_row = thread_result.mappings().first()
+        if thread_row is None:
+            return obsidian_email_ctx or "", "obsidian"
+
+        thread_id = thread_row["thread_id"]
+        account_id = thread_row["account_id"]
+
+        # Fetch full thread from Gmail API
+        full_messages = await gmail_service.get_full_thread_from_gmail(thread_id, account_id, db)
+        if full_messages:
+            # Enrich the Obsidian note with full content
+            accounts_result = await db.execute(
+                text("SELECT email FROM gmail_accounts WHERE id = :id"),
+                {"id": account_id},
+            )
+            user_emails = [row.email for row in accounts_result.fetchall()]
+            try:
+                await obsidian_service.write_thread_to_vault(
+                    thread_id=thread_id,
+                    subject=thread_row["subject"] or "(no subject)",
+                    participants=thread_row["participants"] or [],
+                    message_count=thread_row["message_count"] or len(full_messages),
+                    last_message_at=thread_row["last_message_at"] or datetime.utcnow(),
+                    messages=full_messages,
+                    user_emails=user_emails,
+                    db=db,
+                )
+                logger.info(
+                    "Tier 2 retrieval: fetched full thread %s from Gmail, wrote to Obsidian",
+                    thread_id,
+                )
+            except Exception:
+                logger.exception("Tier 2 Obsidian write failed for thread %s", thread_id)
+
+            # Build context from full messages — inject directly; don't wait for Obsidian vectorization
+            ctx = "Full email thread (fetched directly from Gmail):\n\n"
+            for msg in full_messages:
+                received = msg.get("received_at")
+                date_str = received.strftime("%B %d, %Y") if isinstance(received, datetime) else ""
+                ctx += f"From: {msg.get('from_address', '')}\n"
+                ctx += f"Date: {date_str}\n"
+                ctx += f"{(msg.get('body_text') or '')[:800]}\n\n---\n\n"
+            return ctx.rstrip(), "gmail_api"
+    except Exception:
+        logger.exception("Tier 2 retrieval failed")
+
+    return obsidian_email_ctx or "", "obsidian"
 
 
 def _is_digest_request(message: str) -> bool:
@@ -323,8 +424,12 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
 
     calendar_context = await _calendar_context(db)
     obsidian_context = await obsidian_service.get_obsidian_context(payload.message, db)
-    email_context = await vector_service.get_email_context(payload.message, db)
+
+    # Tiered email/contact retrieval: Obsidian notes first, DB fallback, Gmail API on demand.
+    tier = 2 if any(p in payload.message.lower() for p in _DEEP_PHRASES) else 1
+    email_context, context_source = await _get_context_tiered(payload.message, db, tier=tier)
     contact_context = await contact_service.get_contact_context(payload.message, db)
+
     tone = await settings_service.get_value(db, "response_tone")
     system = claude_service.build_system_prompt(
         calendar_context=calendar_context,
@@ -335,6 +440,8 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
         tone=tone,
         allow_draft=draft_intent,
     )
+    if context_source != "none":
+        system += f"\nContext source: {context_source}"
 
     messages = await _recent_history(db)
     messages.append({"role": "user", "content": payload.message})

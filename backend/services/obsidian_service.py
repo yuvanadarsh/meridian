@@ -12,8 +12,11 @@ import asyncio
 import json
 import logging
 import re
+import shutil
 from datetime import datetime
 from pathlib import Path
+
+import aiofiles
 
 import anthropic
 from sqlalchemy import text
@@ -383,3 +386,422 @@ async def get_obsidian_context(query: str, db: AsyncSession, limit: int = 3) -> 
     for note in notes:
         context += f"### {note['title']}\n{(note['content'] or '')[:500]}\n\n"
     return context.rstrip()
+
+
+async def get_obsidian_email_context(query: str, db: AsyncSession, limit: int = 5) -> str:
+    """Search only Email and Contact notes in the vault for RAG retrieval.
+
+    Filters to notes under ``{vault}/Emails/`` or ``{vault}/Contacts/`` so the
+    result is richer and more specific than the general ``get_obsidian_context``.
+    """
+    from services import vector_service
+    from services.vector_service import to_pgvector
+
+    config = await vector_service.get_embedding_config(db)
+    if config["provider"] == "voyage" and not settings.voyage_api_key:
+        return ""
+
+    vault = vault_path()
+    if vault is None:
+        return ""
+
+    try:
+        query_embedding = (await vector_service.embed_texts([query], db))[0]
+    except Exception:
+        logger.exception("Failed to embed query for Obsidian email context")
+        return ""
+
+    email_prefix = str(vault / "Emails") + "%"
+    contact_prefix = str(vault / "Contacts") + "%"
+
+    result = await db.execute(
+        text(
+            """
+            SELECT title, content, file_path,
+                   1 - (embedding <=> CAST(:embedding AS vector)) AS similarity
+            FROM obsidian_notes
+            WHERE embedding IS NOT NULL
+              AND (file_path LIKE :email_prefix OR file_path LIKE :contact_prefix)
+            ORDER BY embedding <=> CAST(:embedding AS vector)
+            LIMIT :limit
+            """
+        ),
+        {
+            "embedding": to_pgvector(query_embedding),
+            "email_prefix": email_prefix,
+            "contact_prefix": contact_prefix,
+            "limit": limit,
+        },
+    )
+    notes = result.mappings().all()
+    if not notes:
+        return ""
+
+    context = "Relevant information from your knowledge base:\n\n"
+    for note in notes:
+        context += f"### {note['title']}\n{(note['content'] or '')[:600]}\n\n"
+    return context.rstrip()
+
+
+# ---------------------------------------------------------------------------
+# Email thread vault writer — unified memory layer
+# ---------------------------------------------------------------------------
+
+
+async def generate_thread_summary(subject: str, messages_text: str) -> str:
+    """2-3 sentence AI summary of an email thread, using Claude Haiku for cost efficiency."""
+    try:
+        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        response = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=150,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Summarize this email thread in 2-3 sentences. "
+                    "Be specific about what was discussed and any decisions made. No emojis.\n\n"
+                    f"Subject: {subject}\n\n{messages_text[:1500]}"
+                ),
+            }],
+        )
+        return response.content[0].text.strip()
+    except Exception:
+        logger.warning("Thread summary generation failed for: %s", subject)
+        return f"Email thread about {subject}."
+
+
+async def write_thread_to_vault(
+    thread_id: str,
+    subject: str,
+    participants: list[str],
+    message_count: int,
+    last_message_at: datetime,
+    messages: list[dict],
+    user_emails: list[str],
+    db: AsyncSession,
+) -> str:
+    """Write an email thread as a linked note to the Obsidian vault.
+
+    Returns the absolute path of the written file, or an empty string when the
+    vault is not configured or the write fails.
+    """
+    vault = vault_path()
+    if vault is None:
+        return ""
+
+    # Fetch ALL connected account emails so we correctly exclude every address
+    # the user owns — not just the single account that owns this thread.
+    try:
+        all_accounts_result = await db.execute(text("SELECT email FROM gmail_accounts"))
+        all_user_emails = [row.email for row in all_accounts_result.fetchall()]
+    except Exception:
+        all_user_emails = list(user_emails)
+
+    # Username prefixes (e.g. "yuvanadarshj") catch address variants like
+    # "yuvanadarshj+filter@gmail.com" that simple equality would miss.
+    user_usernames = [e.split("@")[0].lower() for e in all_user_emails]
+
+    contact_email: str | None = None
+    for participant in participants:
+        p_lower = participant.lower()
+        if any(ue.lower() in p_lower for ue in all_user_emails):
+            continue
+        if any(uu in p_lower.split("@")[0] for uu in user_usernames):
+            continue
+        contact_email = participant
+        break
+
+    # Self-sent thread: file under "Self" rather than the user's own name.
+    if contact_email is None:
+        contact_email = "self"
+        contact_name = "Self"
+    else:
+        # Look up display name from contacts table
+        try:
+            contact_result = await db.execute(
+                text("SELECT display_name FROM contacts WHERE email_address = :email"),
+                {"email": contact_email},
+            )
+            contact_row = contact_result.fetchone()
+            contact_name = (
+                contact_row.display_name
+                if contact_row and contact_row.display_name
+                else contact_email.split("@")[0]
+            )
+        except Exception:
+            contact_name = contact_email.split("@")[0]
+
+    # Generate AI summary
+    messages_text = "\n\n".join([
+        f"From: {m.get('from_address', '')}\n{(m.get('body_text') or '')[:300]}"
+        for m in messages[:5]
+    ])
+    summary = await generate_thread_summary(subject, messages_text)
+
+    # Extract wikilinks, ensuring contact is always first; strip any link that
+    # refers to the user themselves (e.g. "[[Yuvan yuvanadarshj]]").
+    wikilinks = await extract_wikilinks(summary + " " + subject)
+    wikilinks = [
+        w for w in wikilinks
+        if not any(uu in w.lower() for uu in user_usernames if len(uu) > 2)
+    ]
+    if contact_name not in wikilinks and contact_name != "Self":
+        wikilinks.insert(0, contact_name)
+
+    safe_subject = (
+        re.sub(r"[^\w\s-]", "", subject)[:60].strip().replace(" ", "-") or "no-subject"
+    )
+    contact_dir = re.sub(r"[^\w\s-]", "", contact_name)[:40].strip() or "Unknown"
+
+    dir_path = vault / "Emails" / contact_dir
+    await asyncio.to_thread(dir_path.mkdir, parents=True, exist_ok=True)
+    file_path = dir_path / f"{safe_subject}.md"
+
+    # Format up to 5 most recent messages
+    messages_md = ""
+    for msg in messages[-5:]:
+        received = msg.get("received_at")
+        date_str = received.strftime("%B %d, %Y") if isinstance(received, datetime) else "Unknown date"
+        sender = (msg.get("from_address") or "").split("@")[0]
+        body = (msg.get("body_text") or "")[:500]
+        messages_md += f"\n### {date_str} — {sender}\n{body}\n"
+
+    related_links = "\n".join(f"- [[{w}]]" for w in wikilinks[:8])
+    last_date = last_message_at.strftime("%B %d, %Y")
+
+    note_content = (
+        f"# {subject}\n\n"
+        f"*Thread with [[{contact_name}]] · {message_count} messages · Last message: {last_date}*\n\n"
+        f"## Summary\n{summary}\n\n"
+        f"## Messages\n{messages_md}\n\n"
+        f"## Related\n{related_links}\n"
+    )
+
+    async with aiofiles.open(str(file_path), "w", encoding="utf-8") as f:
+        await f.write(note_content)
+
+    return str(file_path)
+
+
+async def export_threads_to_obsidian_background(account_id: int) -> None:
+    """Write all email threads for an account to the Obsidian vault (background task).
+
+    Clears the ``Emails/`` directory first so stale notes from a previous export
+    (e.g. threads filed under the wrong contact name) don't persist.
+    """
+    from db.database import AsyncSessionLocal
+    from services import settings_service
+
+    # Wipe the Emails/ subtree so re-exports always start from a clean slate.
+    emails_dir = vault_path()
+    if emails_dir is not None:
+        emails_dir = emails_dir / "Emails"
+        if emails_dir.exists():
+            await asyncio.to_thread(shutil.rmtree, str(emails_dir))
+            logger.info("Cleared Emails/ directory for clean re-export")
+
+    async with AsyncSessionLocal() as db:
+        accounts_result = await db.execute(
+            text("SELECT email FROM gmail_accounts WHERE id = :id"),
+            {"id": account_id},
+        )
+        user_emails = [row.email for row in accounts_result.fetchall()]
+
+        threads_result = await db.execute(
+            text(
+                """
+                SELECT thread_id, subject, participants, message_count, last_message_at
+                FROM email_threads
+                WHERE account_id = :account_id
+                ORDER BY last_message_at DESC
+                """
+            ),
+            {"account_id": account_id},
+        )
+        thread_rows = threads_result.fetchall()
+        total = len(thread_rows)
+        logger.info("Exporting %s threads to Obsidian for account %s", total, account_id)
+
+        progress_key = f"obsidian_export_progress_{account_id}"
+        await settings_service.set_value(
+            db, progress_key, json.dumps({"processed": 0, "total": total})
+        )
+
+        processed = 0
+        for thread in thread_rows:
+            try:
+                messages_result = await db.execute(
+                    text(
+                        """
+                        SELECT from_address, body_text, received_at
+                        FROM emails
+                        WHERE thread_id = :thread_id
+                          AND account_id = :account_id
+                        ORDER BY received_at ASC
+                        LIMIT 10
+                        """
+                    ),
+                    {"thread_id": thread.thread_id, "account_id": account_id},
+                )
+                messages = [dict(row._mapping) for row in messages_result.fetchall()]
+
+                await write_thread_to_vault(
+                    thread_id=thread.thread_id,
+                    subject=thread.subject or "(no subject)",
+                    participants=thread.participants or [],
+                    message_count=thread.message_count or 0,
+                    last_message_at=thread.last_message_at or datetime.utcnow(),
+                    messages=messages,
+                    user_emails=user_emails,
+                    db=db,
+                )
+                processed += 1
+                if processed % 50 == 0:
+                    await settings_service.set_value(
+                        db, progress_key, json.dumps({"processed": processed, "total": total})
+                    )
+                    logger.info("Obsidian export: %s/%s threads written", processed, total)
+            except Exception:
+                logger.warning("Failed to write thread %s to Obsidian", thread.thread_id)
+                continue
+
+        await settings_service.set_value(
+            db, progress_key, json.dumps({"processed": total, "total": total, "done": True})
+        )
+        logger.info("Obsidian export complete for account %s: %s threads", account_id, total)
+
+
+# ---------------------------------------------------------------------------
+# Contact vault writer
+# ---------------------------------------------------------------------------
+
+
+async def write_contact_to_vault(
+    email_address: str,
+    display_name: str | None,
+    email_count: int,
+    last_contacted: datetime | None,
+    db: AsyncSession,
+) -> str:
+    """Write a contact profile as a linked note to the Obsidian vault.
+
+    Returns the absolute path of the written file, or an empty string when the
+    vault is not configured.
+    """
+    vault = vault_path()
+    if vault is None:
+        return ""
+
+    contact_name = display_name or email_address.split("@")[0]
+    safe_name = re.sub(r"[^\w\s-]", "", contact_name)[:60].strip() or "Unknown"
+
+    # Find email subjects involving this contact for thread linking
+    try:
+        threads_result = await db.execute(
+            text(
+                """
+                SELECT DISTINCT subject, thread_id
+                FROM emails
+                WHERE from_address = :email
+                   OR :email = ANY(to_addresses)
+                ORDER BY subject
+                LIMIT 10
+                """
+            ),
+            {"email": email_address},
+        )
+        threads = [dict(row._mapping) for row in threads_result.fetchall()]
+    except Exception:
+        threads = []
+
+    # Extract topics from thread subjects
+    subjects_text = " ".join((t.get("subject") or "") for t in threads)
+    topics = await extract_wikilinks(subjects_text) if subjects_text.strip() else []
+
+    last_date = last_contacted.strftime("%B %d, %Y") if last_contacted else "Unknown"
+
+    thread_links = (
+        "\n".join(
+            "- [[{}]]".format(
+                re.sub(r"[^\w\s-]", "", t.get("subject") or "no-subject")[:60]
+                .strip()
+                .replace(" ", "-")
+            )
+            for t in threads
+        )
+        or "No threads recorded."
+    )
+
+    note_content = (
+        f"# {contact_name}\n\n"
+        f"*{email_address} · {email_count} emails · Last contacted: {last_date}*\n\n"
+        f"## About\n"
+        f"{contact_name} is a contact you've exchanged {email_count} emails with.\n"
+        f"Last contacted: {last_date}\n\n"
+        f"## Email Threads\n{thread_links}\n"
+    )
+    if topics:
+        related_links = "\n".join(f"- [[{t}]]" for t in topics[:8])
+        note_content += f"\n## Related\n{related_links}\n"
+
+    dir_path = vault / "Contacts"
+    await asyncio.to_thread(dir_path.mkdir, parents=True, exist_ok=True)
+    file_path = dir_path / f"{safe_name}.md"
+
+    async with aiofiles.open(str(file_path), "w", encoding="utf-8") as f:
+        await f.write(note_content)
+
+    return str(file_path)
+
+
+async def export_contacts_to_obsidian_background() -> None:
+    """Write all contacts to the Obsidian vault (background task)."""
+    from db.database import AsyncSessionLocal
+    from services import settings_service
+
+    async with AsyncSessionLocal() as db:
+        contacts_result = await db.execute(
+            text(
+                """
+                SELECT email_address, display_name, email_count, last_contacted
+                FROM contacts
+                ORDER BY email_count DESC
+                """
+            )
+        )
+        contacts = contacts_result.fetchall()
+        total = len(contacts)
+        logger.info("Exporting %s contacts to Obsidian", total)
+
+        await settings_service.set_value(
+            db, "obsidian_contacts_export_progress", json.dumps({"processed": 0, "total": total})
+        )
+
+        processed = 0
+        for contact in contacts:
+            try:
+                await write_contact_to_vault(
+                    email_address=contact.email_address,
+                    display_name=contact.display_name,
+                    email_count=contact.email_count or 0,
+                    last_contacted=contact.last_contacted,
+                    db=db,
+                )
+                processed += 1
+                if processed % 100 == 0:
+                    await settings_service.set_value(
+                        db,
+                        "obsidian_contacts_export_progress",
+                        json.dumps({"processed": processed, "total": total}),
+                    )
+                    logger.info("Contacts export: %s/%s written", processed, total)
+            except Exception:
+                logger.warning("Failed to write contact %s to Obsidian", contact.email_address)
+                continue
+
+        await settings_service.set_value(
+            db,
+            "obsidian_contacts_export_progress",
+            json.dumps({"processed": total, "total": total, "done": True}),
+        )
+        logger.info("Contacts Obsidian export complete: %s contacts", total)
