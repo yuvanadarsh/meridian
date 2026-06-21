@@ -4,6 +4,7 @@ import type { IconType } from 'react-icons'
 import {
   HiOutlineBolt,
   HiOutlineDocumentText,
+  HiOutlineInbox,
   HiOutlineLink,
   HiOutlineNewspaper,
 } from 'react-icons/hi2'
@@ -13,6 +14,7 @@ import { RxHamburgerMenu } from 'react-icons/rx'
 import { useMeridianStore } from '../../store/meridianStore'
 import type { ActivePanel } from '../../store/meridianStore'
 import ConnectionsPanel from './ConnectionsPanel'
+import DailyReviewPanel from './DailyReviewPanel'
 import DraftsPanel from './DraftsPanel'
 import SettingsPanel from './SettingsPanel'
 import SuperchargePanel from './SuperchargePanel'
@@ -29,6 +31,7 @@ interface MenuItem {
 
 const MENU_ITEMS: MenuItem[] = [
   { panel: 'settings', label: 'Settings', icon: IoSettingsOutline },
+  { panel: 'review', label: 'Review', icon: HiOutlineInbox },
   { panel: 'drafts', label: 'Drafts', icon: HiOutlineDocumentText },
   { panel: 'connections', label: 'Connections', icon: HiOutlineLink },
   { panel: 'brief', label: 'Brief', icon: HiOutlineNewspaper },
@@ -37,6 +40,7 @@ const MENU_ITEMS: MenuItem[] = [
 
 const PANEL_TITLES: Record<Panel, string> = {
   settings: 'Settings',
+  review: 'Daily Review',
   drafts: 'Drafts',
   connections: 'Connections',
   supercharge: 'Supercharge',
@@ -46,6 +50,8 @@ function PanelContent({ panel }: { panel: Panel }) {
   switch (panel) {
     case 'settings':
       return <SettingsPanel />
+    case 'review':
+      return <DailyReviewPanel />
     case 'drafts':
       return <DraftsPanel />
     case 'connections':

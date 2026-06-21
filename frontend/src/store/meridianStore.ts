@@ -16,6 +16,7 @@ export type ActivePanel =
   | 'connections'
   | 'brief'
   | 'supercharge'
+  | 'review'
   | null
 
 interface MeridianStore {
