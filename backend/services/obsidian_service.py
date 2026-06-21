@@ -562,6 +562,15 @@ async def write_thread_to_vault(
         except Exception:
             contact_name = contact_email.split("@")[0]
 
+    # Strip the email-address portion if the name still carries it, e.g.
+    # "Max Scribner <max.scribner@assetliving.com>" → "Max Scribner". Without
+    # this the directory name becomes "Max Scribner maxscribner" and the same
+    # person ends up with two folders.
+    if contact_name and "<" in contact_name:
+        display_part = contact_name[: contact_name.index("<")].strip()
+        if display_part:
+            contact_name = display_part
+
     # Generate AI summary
     messages_text = "\n\n".join([
         f"From: {m.get('from_address', '')}\n{(m.get('body_text') or '')[:300]}"
@@ -582,9 +591,20 @@ async def write_thread_to_vault(
     safe_subject = (
         re.sub(r"[^\w\s-]", "", subject)[:60].strip().replace(" ", "-") or "no-subject"
     )
-    contact_dir = re.sub(r"[^\w\s-]", "", contact_name)[:40].strip() or "Unknown"
+    safe_contact = re.sub(r"[^\w\s-]", "", contact_name)[:40].strip() or "Unknown"
 
-    dir_path = vault / "Emails" / contact_dir
+    # Reuse an existing folder whose normalized name matches, so a contact never
+    # gets two near-identical directories (e.g. "Max-Scribner" vs "Max Scribner").
+    emails_dir = vault / "Emails"
+    normalized = re.sub(r"[^\w]", "", safe_contact).lower()
+    existing_dir: str | None = None
+    if emails_dir.exists():
+        for entry in await asyncio.to_thread(lambda: list(os.listdir(emails_dir))):
+            if re.sub(r"[^\w]", "", entry).lower() == normalized:
+                existing_dir = entry
+                break
+
+    dir_path = emails_dir / (existing_dir or safe_contact)
     await asyncio.to_thread(dir_path.mkdir, parents=True, exist_ok=True)
     file_path = dir_path / f"{safe_subject}.md"
 
