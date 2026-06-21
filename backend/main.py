@@ -73,13 +73,18 @@ async def run_digest_scheduler() -> None:
                 target_h, target_m = (int(part) for part in time_row.value.split(":"))
 
                 if now_local.hour == target_h and now_local.minute == target_m:
+                    # Compare against the user's *local* date, not the DB's
+                    # CURRENT_DATE (UTC), so a late-evening schedule doesn't skip
+                    # or double-run when the two dates disagree.
+                    today_local = now_local.date()
                     cached = (
                         await db.execute(
-                            text("SELECT id FROM digest_cache WHERE cache_date = CURRENT_DATE")
+                            text("SELECT id FROM digest_cache WHERE cache_date = :today"),
+                            {"today": today_local},
                         )
                     ).fetchone()
                     if not cached:
-                        logger.info("Running scheduled digest for %s", now_local.date())
+                        logger.info("Running scheduled digest for %s", today_local)
                         digest = await digest_service.build_digest(db)
                         await digest_service.save_digest_cache(db, digest)
         except Exception:  # noqa: BLE001 — never let the scheduler loop die
