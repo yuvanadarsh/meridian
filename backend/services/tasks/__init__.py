@@ -7,8 +7,10 @@ package and add one line to ``TASK_REGISTRY``.
 
 from .base import BaseTask
 from .calendar_sync import CalendarSyncTask
+from .email_poll import EmailPollTask
 
 TASK_REGISTRY: dict[str, type[BaseTask]] = {
+    "email_poll": EmailPollTask,
     "calendar_sync": CalendarSyncTask,
 }
 
