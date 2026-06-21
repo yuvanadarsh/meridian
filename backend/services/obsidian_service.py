@@ -11,6 +11,7 @@ Vault ingestion and RAG retrieval build on this module in later steps.
 import asyncio
 import json
 import logging
+import os
 import re
 import shutil
 from datetime import datetime
@@ -221,6 +222,36 @@ async def ingest_note(md_file: Path, db: AsyncSession) -> None:
         },
     )
     await db.commit()
+
+
+async def cleanup_vault_root_stubs() -> None:
+    """Delete stray ``.md`` files in the vault root left by older export bugs.
+
+    Early versions wrote contact and thread notes directly to the vault root
+    instead of the ``Contacts/`` and ``Emails/`` subfolders. This removes those
+    leftovers on startup, keeping only ``Welcome.md``. Subdirectories are never
+    touched.
+    """
+    vault = vault_path()
+    if vault is None:
+        return
+
+    KEEP_FILES = {"Welcome.md"}
+
+    def _cleanup() -> int:
+        removed = 0
+        for item in os.listdir(vault):
+            item_path = vault / item
+            if item_path.is_file() and item.endswith(".md") and item not in KEEP_FILES:
+                try:
+                    item_path.unlink()
+                    logger.info("Removed vault root stub: %s", item)
+                    removed += 1
+                except OSError:
+                    logger.warning("Could not remove vault root stub: %s", item)
+        return removed
+
+    await asyncio.to_thread(_cleanup)
 
 
 async def scan_vault_on_startup() -> None:
@@ -755,9 +786,21 @@ async def write_contact_to_vault(
 
 
 async def export_contacts_to_obsidian_background() -> None:
-    """Write all contacts to the Obsidian vault (background task)."""
+    """Write all contacts to the Obsidian vault (background task).
+
+    Clears the ``Contacts/`` directory first so renamed or stale profiles from a
+    previous export don't linger alongside the freshly written ones.
+    """
     from db.database import AsyncSessionLocal
     from services import settings_service
+
+    # Wipe the Contacts/ subtree so re-exports always start clean.
+    contacts_root = vault_path()
+    if contacts_root is not None:
+        contacts_root = contacts_root / "Contacts"
+        if contacts_root.exists():
+            await asyncio.to_thread(shutil.rmtree, str(contacts_root))
+            logger.info("Cleared Contacts/ directory for clean re-export")
 
     async with AsyncSessionLocal() as db:
         contacts_result = await db.execute(

@@ -97,6 +97,7 @@ async def lifespan(_app: FastAPI):
 
     background_tasks: list[asyncio.Task] = []
     if obsidian_service.vault_path() is not None:
+        await obsidian_service.cleanup_vault_root_stubs()
         await obsidian_service.scan_vault_on_startup()
         background_tasks.append(asyncio.create_task(obsidian_service.watch_vault()))
         background_tasks.append(asyncio.create_task(obsidian_service.vectorize_notes_loop()))
