@@ -180,6 +180,46 @@ async def append_exchange(
     return await asyncio.to_thread(_write)
 
 
+async def append_review_summaries(
+    summaries: list[dict], when: datetime | None = None
+) -> bool:
+    """Append afternoon-review email summaries to today's daily note.
+
+    Each item is ``{"subject", "from", "summary"}``. They're written as bullets
+    under "## Ideas & Notes" so the day's reviewed mail lands in the knowledge
+    layer. Returns False (no-op) when no vault is configured or there's nothing
+    to write.
+    """
+    vault = vault_path()
+    if vault is None or not summaries:
+        return False
+
+    when = when or datetime.now()
+
+    def _write() -> bool:
+        try:
+            daily_dir = vault / "Daily"
+            daily_dir.mkdir(parents=True, exist_ok=True)
+            note_path = daily_dir / f"{when.strftime('%Y-%m-%d')}.md"
+            content = (
+                note_path.read_text(encoding="utf-8") if note_path.exists() else _new_note(when)
+            )
+            block = "\n#### Afternoon review\n"
+            for item in summaries:
+                subject = (item.get("subject") or "(no subject)").strip()
+                sender = (item.get("from") or "").strip()
+                summary = (item.get("summary") or "").strip()
+                block += f"- **{subject}** — {sender}: {summary}\n"
+            content = _insert_into_section(content, "## Ideas & Notes", block)
+            note_path.write_text(content, encoding="utf-8")
+            return True
+        except OSError:
+            logger.exception("Failed to write afternoon review summaries to daily note")
+            return False
+
+    return await asyncio.to_thread(_write)
+
+
 # ---------------------------------------------------------------------------
 # Vault ingestion — pull .md files into PostgreSQL for RAG retrieval
 # ---------------------------------------------------------------------------

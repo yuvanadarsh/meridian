@@ -30,6 +30,7 @@ from routers import (
     gmail,
     health,
     obsidian,
+    review,
     settings as settings_router,
     supercharge,
     voice,
@@ -190,6 +191,7 @@ app.include_router(calendar.router)
 app.include_router(chat.router)
 app.include_router(voice.router)
 app.include_router(obsidian.router)
+app.include_router(review.router)
 app.include_router(drafts.router)
 app.include_router(digest.router)
 app.include_router(settings_router.router)
