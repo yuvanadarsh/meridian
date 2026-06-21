@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import type { IconType } from 'react-icons'
 import {
@@ -69,6 +70,17 @@ export function HamburgerMenu() {
     setMenuOpen(false)
     setActivePanel(null)
   }
+
+  // Escape closes the menu (and any open panel within it), matching the chat and
+  // brief modals so every overlay dismisses the same way.
+  useEffect(() => {
+    if (!menuOpen) return
+    const handleEsc = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') close()
+    }
+    window.addEventListener('keydown', handleEsc)
+    return () => window.removeEventListener('keydown', handleEsc)
+  }, [menuOpen])
 
   const openItem = (panel: Panel | 'brief') => {
     if (panel === 'brief') {
