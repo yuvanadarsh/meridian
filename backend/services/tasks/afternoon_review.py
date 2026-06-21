@@ -11,12 +11,28 @@ before any action is taken.
 
 import json
 import logging
+import re
 
 from sqlalchemy import text
 
 from .base import BaseTask
 
 logger = logging.getLogger(__name__)
+
+# Patterns that suggest the email is proposing a meeting/call worth adding to the
+# calendar. Kept deliberately conservative — false positives clutter the review.
+MEETING_PATTERNS = (
+    r"\b(meet|meeting|call|coffee|lunch|catch up|sync)\b.*\b(monday|tuesday|wednesday|thursday|"
+    r"friday|saturday|sunday|\d{1,2}\s?(am|pm)|\d{1,2}:\d{2})\b",
+    r"\b(let'?s|lets|can we|could we|would you|are you free)\b.*\b(meet|talk|chat|call|get together)\b",
+    r"\b(schedule|book|set up|arrange)\b.*\b(meeting|call|appointment|time)\b",
+)
+
+
+def detect_meeting_language(text_value: str) -> bool:
+    """True when the text looks like it's proposing a meeting or call."""
+    lowered = (text_value or "").lower()
+    return any(re.search(pattern, lowered) for pattern in MEETING_PATTERNS)
 
 
 def _looks_like_reply_needed(email) -> bool:
@@ -93,18 +109,28 @@ class AfternoonEmailReviewTask(BaseTask):
                 )
                 draft_id = draft.get("id") if draft else None
 
-            reviewed.append(
-                {
+            entry = {
+                "email_id": email.id,
+                "subject": email.subject,
+                "from": email.from_address,
+                "classification": classification,
+                "summary": summary,
+                "needs_reply": needs_reply,
+                "draft_id": draft_id,
+                "received_at": email.received_at.isoformat() if email.received_at else None,
+            }
+
+            # Flag emails that read like a meeting proposal so the review panel can
+            # offer a one-tap "Add to calendar".
+            if detect_meeting_language(email.body_text or email.subject or ""):
+                entry["calendar_suggestion"] = {
+                    "detected": True,
                     "email_id": email.id,
-                    "subject": email.subject,
                     "from": email.from_address,
-                    "classification": classification,
-                    "summary": summary,
-                    "needs_reply": needs_reply,
-                    "draft_id": draft_id,
-                    "received_at": email.received_at.isoformat() if email.received_at else None,
+                    "subject": email.subject,
                 }
-            )
+
+            reviewed.append(entry)
 
         await db.execute(
             text(

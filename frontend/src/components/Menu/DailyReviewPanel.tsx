@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
-import { FiCheck, FiMail, FiX } from 'react-icons/fi'
+import { FiCalendar, FiCheck, FiMail, FiX } from 'react-icons/fi'
 import { HiOutlineInbox } from 'react-icons/hi2'
 
 import { api, type DailyReview, type ReviewEmail } from '../../api/client'
@@ -27,6 +27,19 @@ export function DailyReviewPanel() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const setActivePanel = useMeridianStore((state) => state.setActivePanel)
+  const setMenuOpen = useMeridianStore((state) => state.setMenuOpen)
+  const setChatOpen = useMeridianStore((state) => state.setChatOpen)
+  const setChatPrefill = useMeridianStore((state) => state.setChatPrefill)
+
+  // Open the chat pre-filled to schedule a meeting from a suggested email.
+  const addToCalendar = (email: ReviewEmail) => {
+    const who = email.from || 'them'
+    const about = email.subject ? ` about "${email.subject}"` : ''
+    setChatPrefill(`Schedule a meeting with ${who}${about}.`)
+    setActivePanel(null)
+    setMenuOpen(false)
+    setChatOpen(true)
+  }
 
   const load = async () => {
     try {
@@ -85,7 +98,10 @@ export function DailyReviewPanel() {
   const groups = useMemo(() => {
     const emails = review?.emails ?? []
     const actionRequired = emails.filter(
-      (email) => email.needs_reply || email.draft_id !== null,
+      (email) =>
+        email.needs_reply ||
+        email.draft_id !== null ||
+        email.calendar_suggestion?.detected,
     )
     const actionIds = new Set(actionRequired.map((email) => email.email_id))
     const fyi = emails.filter(
@@ -185,6 +201,15 @@ export function DailyReviewPanel() {
                   className="rounded-lg bg-white/10 px-3 py-1.5 text-xs text-white/80 transition-colors hover:bg-white/15"
                 >
                   View draft reply
+                </button>
+              )}
+              {email.calendar_suggestion?.detected && (
+                <button
+                  type="button"
+                  onClick={() => addToCalendar(email)}
+                  className="flex items-center gap-1.5 rounded-lg bg-sky-500/20 px-3 py-1.5 text-xs text-sky-200 transition-colors hover:bg-sky-500/30"
+                >
+                  <FiCalendar size={13} /> Add to calendar
                 </button>
               )}
             </ReviewCard>

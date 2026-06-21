@@ -38,6 +38,8 @@ function App() {
   const setOnboardingAccountId = useMeridianStore((state) => state.setOnboardingAccountId)
   const triageReviewAccountId = useMeridianStore((state) => state.triageReviewAccountId)
   const setTriageReviewAccountId = useMeridianStore((state) => state.setTriageReviewAccountId)
+  const chatPrefill = useMeridianStore((state) => state.chatPrefill)
+  const setChatPrefill = useMeridianStore((state) => state.setChatPrefill)
   const { send, sending } = useChat()
   const { recording, supported, toggleRecording } = useVoice()
 
@@ -150,6 +152,8 @@ function App() {
         voiceSupported={supported}
         recording={recording}
         onToggleMic={toggleRecording}
+        prefill={chatPrefill}
+        onPrefillConsumed={() => setChatPrefill(null)}
       />
 
       <HamburgerMenu />
