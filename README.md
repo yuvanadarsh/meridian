@@ -1,9 +1,17 @@
 # Meridian
 
+> A local-first personal AI operating system — voice-enabled, email-aware, and wired into your Obsidian vault.
+
+![Meridian Dashboard](images/dashboard.png)
+
 A local-first personal AI operating system. Meridian manages your email accounts,
 calendars, and daily information — and lets you interact with all of it through
 a voice-enabled animated interface. All data is stored locally; the only outbound
 calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
+
+![Obsidian Knowledge Graph](images/graph.png)
+
+---
 
 ## Features (Phase 1)
 
@@ -74,6 +82,35 @@ calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
   normal / safe)
 - Fix: draft intent detection no longer triggers on plain email questions
 
+## Features (Phase 5A — Unified Memory)
+
+- **Obsidian as the knowledge layer** — email threads and contacts are exported
+  to your Obsidian vault as fully linked `.md` notes, making Obsidian the single
+  source of truth for long-term memory rather than a parallel system
+  - `Emails/{Contact}/` — one note per thread with an AI-generated summary,
+    the 5 most recent messages, and `[[wikilinks]]` to contacts and topics
+  - `Contacts/` — one note per contact with email count, relationship history,
+    topics, and links back to their threads
+  - Export triggers automatically after triage approval for new accounts; existing
+    accounts have a manual "Export to Obsidian" button in the Connections panel
+- **Tiered retrieval pipeline** — chat context is assembled in order of richness:
+  1. **Tier 1** — semantic search over Obsidian note embeddings (fast, wikilink-rich)
+  2. **Tier 2** — triggered by follow-up phrases ("tell me more", "full details");
+     searches by participant name first, then vector similarity, then fetches the
+     complete thread live from the Gmail API, enriches the Obsidian note, and
+     injects the full message bodies into the Claude context in the same request
+  3. **Fallback** — raw email thread embeddings if Obsidian has no relevant notes yet
+- **Name-aware thread lookup** — extracts person names from queries and searches
+  `email_threads.participants` directly before falling back to vector similarity,
+  so "what did Alex email me about?" reliably finds Alex's threads
+- **Relevance threshold** — tier 2 skips the Gmail fetch if the best vector match
+  scores below 0.3 similarity, preventing irrelevant fetches on unrelated queries
+- **Previous-query substitution** — pure follow-up phrases ("tell me more", "yes")
+  use the last substantive user message as the search query instead of the
+  follow-up itself, which has no semantic relationship to any email thread
+
+---
+
 ## Prerequisites
 
 - macOS or Linux
@@ -87,7 +124,7 @@ calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
 1. Clone the repo and configure environment:
 
    ```bash
-   git clone https://github.com/YOUR_USERNAME/meridian.git
+   git clone https://github.com/yuvanadarsh/meridian.git
    cd meridian
    cp .env.example .env
    # Edit .env with your API keys and local postgres credentials
@@ -100,8 +137,7 @@ calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
    psql -U your_user -d meridian -f backend/db/init.sql
    ```
 
-   On an existing database, apply the migrations in order instead of (or in
-   addition to) re-running `init.sql`:
+   On an existing database, apply the migrations in order:
 
    ```bash
    psql -U your_user -d meridian -f backend/db/migrations/002_obsidian_notes.sql
@@ -112,7 +148,6 @@ calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
    psql -U your_user -d meridian -f backend/db/migrations/007_settings.sql
    psql -U your_user -d meridian -f backend/db/migrations/008_add_timezone_setting.sql
    psql -U your_user -d meridian -f backend/db/migrations/009_digest_cache.sql
-   # Phase 4
    psql -U your_user -d meridian -f backend/db/migrations/010_email_threads.sql
    psql -U your_user -d meridian -f backend/db/migrations/011_hybrid_search.sql
    psql -U your_user -d meridian -f backend/db/migrations/011b_threads_fts.sql
@@ -130,14 +165,14 @@ calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
    container instead. When unset, the daily-note writer and RAG retrieval
    simply no-op.
 
-4. Start Meridian (FastAPI + Vite, connecting to your host PostgreSQL):
+4. Start Meridian:
 
    ```bash
    docker compose up --build
    ```
 
-5. Open http://localhost:5173 (use **Chrome** — push-to-talk voice relies on the
-   Web Speech API, which other browsers don't fully support)
+5. Open http://localhost:5173 in **Chrome** — push-to-talk voice relies on the
+   Web Speech API, which other browsers don't fully support.
 
 6. Connect your Gmail account via the Connections panel (hamburger menu), which
    drops you straight into the onboarding flow. You can also connect from the CLI:
@@ -184,14 +219,32 @@ OAuth tokens are stored in the database after first authentication, never in `.e
 - **AI:** Claude (`claude-sonnet-4-6`) by default for reasoning, with a pluggable
   provider layer (OpenAI / Gemini / DeepSeek / Ollama over OpenAI-compatible
   endpoints); VoyageAI for embeddings (configurable); ElevenLabs for TTS
-- **Retrieval:** thread-aware hybrid search (pgvector + Postgres full-text, fused
-  with Reciprocal Rank Fusion) over emails, plus Obsidian-note RAG
-- **Memory:** an Obsidian vault (set via `OBSIDIAN_VAULT_PATH`) — daily notes are
-  written after each exchange, ingested back into pgvector, and retrieved into
-  chat context. A background watcher in the FastAPI lifespan polls the vault.
+- **Memory:** unified Obsidian vault — email threads and contacts are exported as
+  linked `.md` notes, daily conversation notes are appended after each exchange,
+  and the entire vault is ingested into pgvector via a background watcher.
+  Retrieval is tiered: Obsidian note search → live Gmail API fetch → raw thread embeddings
+- **Retrieval:** thread-aware hybrid search (pgvector + Postgres full-text fused
+  with Reciprocal Rank Fusion) with name-aware participant lookup and a
+  relevance threshold before any live Gmail fetch
 
 Only the `api` and `frontend` services run in Docker; the API container reaches
 your host PostgreSQL via `host.docker.internal`.
+
+## Roadmap
+
+- [ ] Email send from Drafts panel via Gmail API
+- [ ] Connect multiple Gmail accounts through the existing onboarding UI
+- [ ] Calendar conflict detection across accounts
+- [ ] Setup wizard for first-time users
+- [ ] Docker Hub image for one-command install
+- [ ] Always-on wake word (currently push-to-talk only)
+- [ ] Slack integration
+
+## Contributing
+
+PRs welcome. If you clone Meridian and build something on top of it, open an issue
+to share what you made — integrations, embedding model support, new UI panels, and
+wake-word implementations are all good starting points.
 
 ## License
 
