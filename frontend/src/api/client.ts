@@ -141,6 +141,8 @@ export interface SuperchargeImport {
 export interface AIProvider {
   provider: string
   has_key: boolean
+  // 'configured' = stored in DB, 'env' = supplied via .env, null = not set.
+  key_source?: 'configured' | 'env' | null
   base_url: string | null
   is_active: boolean
   model_chat: string | null

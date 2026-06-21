@@ -155,12 +155,18 @@ export function AIProvidersSection() {
                 </button>
               </div>
 
-              <div className="mt-0.5 text-xs text-white/30">
+              <div
+                className={`mt-0.5 text-xs ${
+                  provider.key_source === 'env' ? 'text-green-400/80' : 'text-white/30'
+                }`}
+              >
                 {isOllama
                   ? provider.base_url || 'URL not set'
-                  : configured
-                    ? 'key: ••••••••••••'
-                    : 'key: not set'}
+                  : provider.key_source === 'env'
+                    ? 'key: set via .env'
+                    : configured
+                      ? 'key: ••••••••••••'
+                      : 'key: not set'}
               </div>
 
               {isEditing && (

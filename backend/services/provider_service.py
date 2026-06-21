@@ -204,7 +204,13 @@ async def call_classify(
 
 
 async def list_providers(db: AsyncSession) -> list[dict]:
-    """Return every provider with keys MASKED — never expose decrypted keys."""
+    """Return every provider with keys MASKED — never expose decrypted keys.
+
+    Anthropic is special-cased: when no key is stored in the database but
+    ``ANTHROPIC_API_KEY`` is present in the environment, it still reports as
+    configured (``key_source = "env"``) so the UI doesn't show "not set" for a
+    provider that actually works out of the box.
+    """
     result = await db.execute(
         text(
             """
@@ -215,16 +221,36 @@ async def list_providers(db: AsyncSession) -> list[dict]:
         )
     )
     providers = []
+    seen = set()
     for row in result.mappings().all():
+        seen.add(row["provider"])
+        stored_key = bool(row["api_key"])
+        env_key = row["provider"] == "anthropic" and bool(settings.anthropic_api_key)
         providers.append(
             {
                 "provider": row["provider"],
-                "has_key": bool(row["api_key"]),
+                "has_key": stored_key or env_key,
+                "key_source": "configured" if stored_key else ("env" if env_key else None),
                 "base_url": row["base_url"],
                 "is_active": row["is_active"],
                 "model_chat": row["model_chat"],
                 "model_classify": row["model_classify"],
                 "model_draft": row["model_draft"],
+            }
+        )
+
+    # Surface Anthropic from the environment even when it has no DB row yet.
+    if "anthropic" not in seen and settings.anthropic_api_key:
+        providers.append(
+            {
+                "provider": "anthropic",
+                "has_key": True,
+                "key_source": "env",
+                "base_url": None,
+                "is_active": False,
+                "model_chat": None,
+                "model_classify": None,
+                "model_draft": None,
             }
         )
     return providers
