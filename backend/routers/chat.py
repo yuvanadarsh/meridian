@@ -172,6 +172,17 @@ DRAFT_TRIGGER_PHRASES = (
 # Loose RFC-ish check: a recipient must at least look like local@domain.tld.
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
+# A calendar event awaiting the user's confirmation after a conflict warning.
+# This is a local, single-user app, so a module-level slot is enough — there's
+# no per-session state to track.
+_pending_event: dict | None = None
+
+# Affirmative replies that confirm a pending (conflicting) calendar event.
+_AFFIRMATIVE_RE = re.compile(
+    r"^\s*(yes|yeah|yep|yup|sure|ok|okay|confirm|go ahead|schedule anyway|do it|please do)\b",
+    re.IGNORECASE,
+)
+
 
 def is_draft_intent(message: str) -> bool:
     """True only when the user explicitly asks to draft/write/send an email.
@@ -292,30 +303,117 @@ async def _maybe_handle_action(
         except json.JSONDecodeError:
             logger.warning("Malformed CALENDAR_CREATE token: %s", first_line)
             return None
-        account_id = params.get("account_id")
-        if not account_id:
-            accounts = await gmail_service.list_accounts(db)
-            if not accounts:
-                return "I couldn't create that event — no account is connected yet."
-            account_id = accounts[0]["id"]
-        title = params.get("title", "Untitled event")
-        start = params.get("start", "")
-        end = params.get("end", "")
-        try:
-            await calendar_service.create_event(
-                account_id=account_id,
-                title=title,
-                start_time=start,
-                end_time=end,
-                db=db,
-                description=params.get("description", ""),
-            )
-        except Exception:  # noqa: BLE001
-            logger.exception("Calendar event creation from chat failed")
-            return "I ran into a problem creating that event."
-        return f"Done — {title} added to your calendar{_friendly_when(start)}."
+        return await _handle_calendar_create(params, db)
+
+    if first_line.startswith("CALENDAR_CONFIRM:"):
+        # Claude can confirm a pending (conflicting) event; the affirmative-reply
+        # path in the endpoint covers a plain "yes" too.
+        return await _confirm_pending_event(db)
 
     return None
+
+
+async def _resolve_account_id(params: dict, db: AsyncSession) -> int | None:
+    """Use the token's account_id, or fall back to the first connected account."""
+    account_id = params.get("account_id")
+    if account_id:
+        return account_id
+    accounts = await gmail_service.list_accounts(db)
+    return accounts[0]["id"] if accounts else None
+
+
+async def _handle_calendar_create(params: dict, db: AsyncSession) -> str:
+    """Create a calendar event, warning first if it overlaps an existing one."""
+    global _pending_event
+
+    account_id = await _resolve_account_id(params, db)
+    if account_id is None:
+        return "I couldn't create that event — no account is connected yet."
+
+    title = params.get("title", "Untitled event")
+    start = params.get("start", "")
+    end = params.get("end", "")
+
+    # Check for overlapping events before creating anything.
+    conflicts = []
+    try:
+        start_dt = datetime.fromisoformat(start)
+        end_dt = datetime.fromisoformat(end)
+        conflicts = await calendar_service.check_conflicts(account_id, start_dt, end_dt, db)
+    except (ValueError, TypeError):
+        # Unparseable times — skip the conflict check and let create_event try.
+        pass
+    except Exception:  # noqa: BLE001
+        logger.exception("Conflict check failed; proceeding to create")
+
+    if conflicts:
+        _pending_event = {
+            "account_id": account_id,
+            "title": title,
+            "start": start,
+            "end": end,
+            "description": params.get("description", ""),
+        }
+        desc = ", ".join(f"{_conflict_title(c)} at {_conflict_when(c)}" for c in conflicts)
+        return (
+            f"You already have {desc} at that time. "
+            "Should I schedule anyway? Reply 'yes' to confirm."
+        )
+
+    return await _create_calendar_event(
+        {
+            "account_id": account_id,
+            "title": title,
+            "start": start,
+            "end": end,
+            "description": params.get("description", ""),
+        },
+        db,
+    )
+
+
+async def _create_calendar_event(event: dict, db: AsyncSession) -> str:
+    """Insert the event and return a friendly confirmation message."""
+    global _pending_event
+    try:
+        await calendar_service.create_event(
+            account_id=event["account_id"],
+            title=event["title"],
+            start_time=event["start"],
+            end_time=event["end"],
+            db=db,
+            description=event.get("description", ""),
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("Calendar event creation from chat failed")
+        return "I ran into a problem creating that event."
+    _pending_event = None
+    return f"Done — {event['title']} added to your calendar{_friendly_when(event['start'])}."
+
+
+async def _confirm_pending_event(db: AsyncSession) -> str:
+    """Create the event held after a conflict warning, if any."""
+    if not _pending_event:
+        return "There's no event waiting to be confirmed."
+    return await _create_calendar_event(_pending_event, db)
+
+
+def _conflict_title(row) -> str:
+    return getattr(row, "title", None) or "an event"
+
+
+def _conflict_when(row) -> str:
+    """Render a stored (UTC-naive) conflict start time in the user's local time."""
+    from datetime import timezone
+    from zoneinfo import ZoneInfo
+
+    start = getattr(row, "start_time", None)
+    if not isinstance(start, datetime):
+        return "that time"
+    local = start.replace(tzinfo=timezone.utc).astimezone(
+        ZoneInfo(calendar_service.DEFAULT_TIMEZONE)
+    )
+    return local.strftime("%-I:%M %p")
 
 
 def _friendly_when(start: str) -> str:
@@ -396,8 +494,23 @@ async def _persist_exchange(
 @router.post("/message", response_model=ChatResponse)
 async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db)):
     """Send a user message to Claude and persist the exchange + token usage."""
+    global _pending_event
+
     if not settings.anthropic_api_key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not configured")
+
+    # If an event is awaiting confirmation after a conflict warning, resolve it
+    # from this message directly instead of round-tripping through Claude.
+    if _pending_event is not None:
+        if _AFFIRMATIVE_RE.match(payload.message):
+            reply = await _confirm_pending_event(db)
+            await _persist_exchange(db, payload.message, reply, total=0)
+            return ChatResponse(response=reply, tokens=TokenUsage(input=0, output=0, total=0))
+        if re.match(r"^\s*(no|nope|cancel|don'?t|never\s?mind)\b", payload.message, re.IGNORECASE):
+            _pending_event = None
+            reply = "Okay, I won't schedule it."
+            await _persist_exchange(db, payload.message, reply, total=0)
+            return ChatResponse(response=reply, tokens=TokenUsage(input=0, output=0, total=0))
 
     # "Give me the digest" short-circuits normal chat: build the brief and return
     # its voice-ready text so callers (voice/TTS) read it aloud.
