@@ -197,6 +197,40 @@ export interface DailyReview {
   updated_at: string | null
 }
 
+export interface ScheduledTask {
+  id: number
+  task_key: string
+  display_name: string | null
+  schedule_time: string
+  schedule_days: string
+  enabled: boolean
+  last_run_at: string | null
+  last_run_status: string | null
+  last_run_summary: string | null
+}
+
+export interface AvailableTask {
+  key: string
+  name: string
+  description: string
+  default_schedule: string
+  default_days: string
+}
+
+export interface TaskCreate {
+  task_key: string
+  display_name?: string
+  schedule_time?: string
+  schedule_days?: string
+}
+
+export interface TaskPatch {
+  display_name?: string
+  schedule_time?: string
+  schedule_days?: string
+  enabled?: boolean
+}
+
 export const api = {
   baseUrl: API_URL,
   getAccounts: () => request<GmailAccount[]>('/gmail/accounts'),
@@ -391,4 +425,20 @@ export const api = {
     request<{ status: string; review: DailyReview | null }>('/review/dismiss', {
       method: 'POST',
     }),
+
+  // Scheduled tasks
+  getTasks: () => request<{ tasks: ScheduledTask[] }>('/tasks'),
+  getAvailableTasks: () => request<{ tasks: AvailableTask[] }>('/tasks/available'),
+  createTask: (payload: TaskCreate) =>
+    request<ScheduledTask>('/tasks', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateTask: (id: number, patch: TaskPatch) =>
+    request<ScheduledTask>(`/tasks/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+  deleteTask: (id: number) =>
+    request<{ deleted: boolean; id: number }>(`/tasks/${id}`, { method: 'DELETE' }),
 }

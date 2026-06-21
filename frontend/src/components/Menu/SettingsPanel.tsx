@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { api } from '../../api/client'
 import { AIProvidersSection } from './AIProvidersSection'
 import { EmbeddingsSection } from './EmbeddingsSection'
+import { ScheduledTasksSection } from './ScheduledTasksSection'
 
 type Tone = 'concise' | 'moderate' | 'conversational'
 type TriageMode = 'aggressive' | 'normal' | 'safe'
@@ -214,6 +215,11 @@ export function SettingsPanel() {
       {/* Memory & embeddings */}
       <div className="border-t border-white/[0.06] pt-5">
         <EmbeddingsSection />
+      </div>
+
+      {/* Scheduled tasks */}
+      <div className="border-t border-white/[0.06] pt-5">
+        <ScheduledTasksSection />
       </div>
     </div>
   )
