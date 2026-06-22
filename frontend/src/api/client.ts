@@ -415,12 +415,15 @@ export const api = {
     request<{ result: { status: string; summary: string }; review: DailyReview | null }>(
       '/review/trigger',
     ),
-  approveReview: () =>
+  approveReview: (overrides: Record<string, string> = {}) =>
     request<{
       status: string
       applied: { trashed: number; archived: number }
       review: DailyReview | null
-    }>('/review/approve', { method: 'POST' }),
+    }>('/review/approve', {
+      method: 'POST',
+      body: JSON.stringify({ overrides }),
+    }),
   dismissReview: () =>
     request<{ status: string; review: DailyReview | null }>('/review/dismiss', {
       method: 'POST',

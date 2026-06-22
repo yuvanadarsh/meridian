@@ -1,72 +1,55 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
-import { FiCalendar, FiCheck, FiChevronDown, FiMail, FiX } from 'react-icons/fi'
+import { FiCheck, FiChevronDown, FiChevronRight, FiLoader } from 'react-icons/fi'
 import { HiOutlineInbox } from 'react-icons/hi2'
 
-import { api, type DailyReview, type ReviewEmail } from '../../api/client'
-import { useMeridianStore } from '../../store/meridianStore'
+import { api, type DailyReview, type ReviewEmail, type TriageStatus } from '../../api/client'
+
+const CATEGORIES: { status: TriageStatus; title: string; note: string }[] = [
+  { status: 'trash', title: 'Trash', note: 'Trashed in Gmail, deleted locally' },
+  { status: 'archive', title: 'Archive', note: 'Removed from inbox, kept in memory' },
+  { status: 'keep', title: 'Keep', note: 'No action — stays in inbox' },
+]
 
 function formatDate(iso: string): string {
-  const date = new Date(`${iso}T00:00:00`)
-  return date.toLocaleDateString(undefined, {
+  return new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, {
     month: 'long',
     day: 'numeric',
     year: 'numeric',
   })
-}
-
-function formatReceived(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, {
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  })
-}
-
-function suggestedAction(email: ReviewEmail): string {
-  if (email.classification === 'trash') return 'Trash — no action needed'
-  if (email.draft_id !== null) return 'Keep — draft reply queued'
-  if (email.needs_reply) return 'Keep — reply needed'
-  if (email.calendar_suggestion?.detected) return 'Keep — schedule a meeting'
-  if (email.classification === 'archive') return 'Archive — no reply needed'
-  return 'Keep'
 }
 
 /**
- * Daily Review panel: a newspaper-style digest of the afternoon email review.
- * Emails are grouped into Action Required (need a reply / have a queued draft),
- * FYI (archived automatically), and Cleaned Up (trashed). The user approves all
- * to push triage to Gmail, or dismisses without action.
+ * Daily Review panel — mirrors the TriageReview layout used after email sweep.
  *
- * Cards expand on click to show full detail. Dismissed reviews remain viewable
- * (read-only) with a Reopen button and a fresh "Run review now" option.
+ * Emails are grouped into three collapsible sections (Trash / Archive / Keep).
+ * The user can reclassify individual emails via the dropdown on each row; those
+ * changes are applied locally and sent as overrides when the review is approved.
+ * Nothing reaches Gmail until the user clicks "Apply & approve".
  */
 export function DailyReviewPanel() {
   const [review, setReview] = useState<DailyReview | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [expandedId, setExpandedId] = useState<number | null>(null)
-  const setActivePanel = useMeridianStore((state) => state.setActivePanel)
-  const setMenuOpen = useMeridianStore((state) => state.setMenuOpen)
-  const setChatOpen = useMeridianStore((state) => state.setChatOpen)
-  const setChatPrefill = useMeridianStore((state) => state.setChatPrefill)
+  // Local classification choices, keyed by email_id.
+  const [decisions, setDecisions] = useState<Record<number, TriageStatus>>({})
+  const [expanded, setExpanded] = useState<TriageStatus | null>('trash')
+  // Set after a successful approval to show the success state.
+  const [applied, setApplied] = useState<{ trashed: number; archived: number } | null>(null)
 
-  const addToCalendar = (email: ReviewEmail) => {
-    const who = email.from || 'them'
-    const about = email.subject ? ` about "${email.subject}"` : ''
-    setChatPrefill(`Schedule a meeting with ${who}${about}.`)
-    setActivePanel(null)
-    setMenuOpen(false)
-    setChatOpen(true)
+  const seedDecisions = (emails: ReviewEmail[]) => {
+    const d: Record<number, TriageStatus> = {}
+    for (const e of emails) {
+      d[e.email_id] = e.classification as TriageStatus
+    }
+    setDecisions(d)
   }
 
   const load = async () => {
     try {
       const { review: result } = await api.getReview()
       setReview(result)
+      if (result) seedDecisions(result.emails)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load review')
     } finally {
@@ -81,10 +64,17 @@ export function DailyReviewPanel() {
   const runNow = async () => {
     setBusy(true)
     setError(null)
-    setExpandedId(null)
     try {
       const { review: result } = await api.triggerReview()
       setReview(result)
+      if (result) {
+        seedDecisions(result.emails)
+        // Default-expand the first non-empty category.
+        const first = CATEGORIES.find(
+          ({ status }) => result.emails.some((e) => e.classification === status),
+        )
+        if (first) setExpanded(first.status)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not run review')
     } finally {
@@ -92,12 +82,19 @@ export function DailyReviewPanel() {
     }
   }
 
-  const approveAll = async () => {
+  const approve = async () => {
     setBusy(true)
     setError(null)
     try {
-      const { review: result } = await api.approveReview()
-      setReview(result)
+      // Send the full decisions map as overrides so the backend uses the
+      // user's final classifications, not just the auto-triage result.
+      const overrides: Record<string, string> = {}
+      for (const [id, status] of Object.entries(decisions)) {
+        overrides[id] = status
+      }
+      const result = await api.approveReview(overrides)
+      setReview(result.review)
+      setApplied(result.applied)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not approve review')
     } finally {
@@ -131,32 +128,60 @@ export function DailyReviewPanel() {
     }
   }
 
-  const toggleCard = (id: number) => {
-    setExpandedId((prev) => (prev === id ? null : id))
-  }
-
+  // Group emails by their current (possibly user-changed) classification.
   const groups = useMemo(() => {
-    const emails = review?.emails ?? []
-    const actionRequired = emails.filter(
-      (email) =>
-        email.needs_reply ||
-        email.draft_id !== null ||
-        email.calendar_suggestion?.detected,
-    )
-    const actionIds = new Set(actionRequired.map((email) => email.email_id))
-    const fyi = emails.filter(
-      (email) => email.classification === 'archive' && !actionIds.has(email.email_id),
-    )
-    const trashed = emails.filter((email) => email.classification === 'trash')
-    const archivedCount = emails.filter((email) => email.classification === 'archive').length
-    return { actionRequired, fyi, trashed, archivedCount }
-  }, [review])
+    const result: Record<TriageStatus, ReviewEmail[]> = { trash: [], archive: [], keep: [] }
+    for (const email of review?.emails ?? []) {
+      const decision = decisions[email.email_id] ?? (email.classification as TriageStatus)
+      result[decision].push(email)
+    }
+    return result
+  }, [review, decisions])
 
+  const counts = useMemo(
+    () => ({
+      trash: groups.trash.length,
+      archive: groups.archive.length,
+      keep: groups.keep.length,
+    }),
+    [groups],
+  )
+
+  const total = counts.trash + counts.archive + counts.keep
+
+  // --- Loading state ---
   if (loading) {
-    return <p className="py-10 text-center text-sm text-white/40">Loading review…</p>
+    return (
+      <div className="flex items-center justify-center gap-2 py-12 text-white/40">
+        <FiLoader className="animate-spin" size={16} />
+        <span className="text-sm">Loading review…</span>
+      </div>
+    )
   }
 
-  // Empty state — review hasn't run yet today.
+  // --- Post-approval success state ---
+  if (applied) {
+    return (
+      <div className="flex flex-col items-center gap-4 py-12 text-center">
+        <FiCheck size={32} className="text-green-400" />
+        <div>
+          <p className="text-sm font-medium text-white">Review complete</p>
+          <p className="mt-1 text-xs text-white/50">
+            {applied.trashed} trashed · {applied.archived} archived in Gmail
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setApplied(null)}
+          className="rounded-full bg-white px-4 py-1.5 text-xs font-medium text-black transition-opacity hover:opacity-90"
+        >
+          Done
+        </button>
+      </div>
+    )
+  }
+
+  // --- Empty state: no review today ---
   if (!review) {
     return (
       <div className="flex flex-col items-center gap-3 py-12 text-center">
@@ -179,244 +204,190 @@ export function DailyReviewPanel() {
   }
 
   const isPending = review.status === 'pending'
-  const isDismissed = review.status === 'dismissed'
-  const draftCount = review.emails.filter((email) => email.draft_id !== null).length
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.2 }}
-      className="flex flex-col gap-4"
-    >
-      {/* Header */}
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-semibold text-white">
-            Today&apos;s Review — {formatDate(review.review_date)}
-          </h3>
-          <p className="mt-0.5 text-xs text-white/40">
-            {groups.actionRequired.length} need attention · {draftCount} drafts ready ·{' '}
-            {groups.archivedCount} archived · {groups.trashed.length} trashed
-          </p>
+    <div className="flex flex-col gap-4">
+      {/* Sticky metadata header */}
+      <div className="sticky top-0 z-20 bg-[#0d0d0f]/95 pb-3 backdrop-blur">
+        <div className="text-sm font-semibold text-white">
+          Today&apos;s Review — {formatDate(review.review_date)}
         </div>
-        {isPending && (
-          <div className="flex shrink-0 items-center gap-2">
+        <div className="mt-0.5 text-xs text-white/50">
+          {total.toLocaleString()} emails analyzed · {counts.trash.toLocaleString()} trash ·{' '}
+          {counts.archive.toLocaleString()} archive · {counts.keep.toLocaleString()} keep
+        </div>
+
+        {error && <p className="mt-2 text-xs text-rose-300/80">{error}</p>}
+
+        {review.status === 'approved' && (
+          <div className="mt-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/50">
+            Approved — triage applied and summaries saved.
+          </div>
+        )}
+        {review.status === 'dismissed' && (
+          <div className="mt-2 flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-3 py-2">
+            <p className="text-xs text-white/50">Dismissed — no action taken.</p>
+            <div className="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void runNow()}
+                disabled={busy}
+                className="text-xs text-white/40 hover:text-white disabled:opacity-40"
+              >
+                {busy ? 'Running…' : 'Run again'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void reopen()}
+                disabled={busy}
+                className="rounded-lg bg-white/10 px-2.5 py-1 text-xs text-white/70 transition-colors hover:bg-white/20 hover:text-white disabled:opacity-40"
+              >
+                Reopen
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Category sections */}
+      <div className="flex flex-col gap-2">
+        {CATEGORIES.map(({ status, title, note }) => {
+          const isOpen = expanded === status
+          const rows = groups[status]
+
+          return (
+            <div key={status} className="rounded-xl border border-white/10 bg-white/[0.03]">
+              <button
+                type="button"
+                onClick={() => setExpanded(isOpen ? null : status)}
+                className="flex w-full items-center justify-between rounded-xl bg-[#0f1117]/95 px-4 py-3 text-left transition-colors hover:bg-white/[0.06]"
+              >
+                <div className="flex items-center gap-2">
+                  {isOpen ? <FiChevronDown size={16} /> : <FiChevronRight size={16} />}
+                  <span className="font-medium capitalize">{title}</span>
+                  <span className="text-sm text-white/40">{counts[status].toLocaleString()}</span>
+                </div>
+                <span className="text-xs text-white/40">{note}</span>
+              </button>
+
+              {isOpen && rows.length === 0 && (
+                <div className="border-t border-white/[0.06] px-4 py-4 text-sm text-white/40">
+                  Nothing here.
+                </div>
+              )}
+
+              {isOpen && rows.length > 0 && (
+                <ul className="divide-y divide-white/[0.04] border-t border-white/[0.06]">
+                  {rows.map((email) => (
+                    <ReviewRow
+                      key={email.email_id}
+                      email={email}
+                      category={status}
+                      decision={decisions[email.email_id] ?? (email.classification as TriageStatus)}
+                      isPending={isPending}
+                      onDecision={(next) =>
+                        setDecisions((prev) => ({ ...prev, [email.email_id]: next }))
+                      }
+                    />
+                  ))}
+                </ul>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {review.emails.length === 0 && (
+        <p className="py-4 text-center text-sm text-white/40">
+          No emails were reviewed today.
+        </p>
+      )}
+
+      {/* Sticky approve/discard footer — only when the review is still pending */}
+      {isPending && (
+        <div className="sticky bottom-0 -mx-6 border-t border-white/10 bg-[#0d0d0f]/95 px-6 py-4 backdrop-blur">
+          <div className="flex items-center gap-3">
             <button
               type="button"
-              onClick={() => void approveAll()}
+              onClick={() => void approve()}
               disabled={busy}
-              className="flex items-center gap-1.5 rounded-lg bg-green-500/20 px-3 py-1.5 text-xs text-green-300 transition-colors hover:bg-green-500/30 disabled:opacity-40"
+              className="rounded-full bg-white px-5 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-50"
             >
-              <FiCheck size={14} /> Approve all
+              {busy ? 'Applying…' : 'Apply & approve'}
             </button>
             <button
               type="button"
               onClick={() => void dismiss()}
               disabled={busy}
-              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs text-white/50 transition-colors hover:bg-white/10 hover:text-white/80 disabled:opacity-40"
+              className="text-sm text-white/40 transition-colors hover:text-white/70 disabled:opacity-40"
             >
-              <FiX size={14} /> Dismiss
+              Discard
             </button>
+            <span className="ml-auto text-xs text-white/40">
+              Trashes {counts.trash.toLocaleString()}, archives{' '}
+              {counts.archive.toLocaleString()} in Gmail.
+            </span>
           </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+interface ReviewRowProps {
+  email: ReviewEmail
+  category: TriageStatus
+  decision: TriageStatus
+  isPending: boolean
+  onDecision: (status: TriageStatus) => void
+}
+
+/** One reviewable email: checkbox (for trash/archive), summary, sender · date, dropdown. */
+function ReviewRow({ email, category, decision, isPending, onDecision }: ReviewRowProps) {
+  const when = email.received_at ? new Date(email.received_at).toLocaleDateString() : ''
+  const sender = email.from || 'Unknown sender'
+  const summary = email.summary || email.subject || '(no summary)'
+
+  return (
+    <li className="px-4 py-2.5">
+      <div className="flex items-start gap-3">
+        {/* Checkbox only shown for trash/archive; toggling moves the email to Keep */}
+        {category !== 'keep' && (
+          <input
+            type="checkbox"
+            checked={decision !== 'keep'}
+            onChange={(event) => onDecision(event.target.checked ? category : 'keep')}
+            disabled={!isPending}
+            aria-label="Include in this action"
+            className="mt-1 h-4 w-4 shrink-0 accent-white disabled:opacity-40"
+          />
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm text-white">{summary}</div>
+          <div className="mt-0.5 truncate text-xs text-white/40">
+            {sender}
+            {when && ` · ${when}`}
+          </div>
+        </div>
+        {/* Dropdown when pending; read-only badge when approved/dismissed */}
+        {isPending ? (
+          <select
+            value={decision}
+            onChange={(event) => onDecision(event.target.value as TriageStatus)}
+            aria-label="Move to category"
+            className="shrink-0 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-white/80 focus:border-white/30 focus:outline-none"
+          >
+            <option value="keep">Keep</option>
+            <option value="archive">Archive</option>
+            <option value="trash">Trash</option>
+          </select>
+        ) : (
+          <span className="shrink-0 rounded-lg border border-white/10 px-2 py-1 text-xs capitalize text-white/40">
+            {decision}
+          </span>
         )}
       </div>
-
-      {error && <p className="text-xs text-rose-300/80">{error}</p>}
-
-      {/* Status banner for approved / dismissed */}
-      {review.status === 'approved' && (
-        <p className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/50">
-          Approved — triage applied and summaries saved.
-        </p>
-      )}
-
-      {isDismissed && (
-        <div className="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-3 py-2">
-          <p className="text-xs text-white/50">Dismissed — no action taken.</p>
-          <div className="flex shrink-0 items-center gap-2">
-            <button
-              type="button"
-              onClick={() => void runNow()}
-              disabled={busy}
-              className="text-xs text-white/40 hover:text-white disabled:opacity-40"
-            >
-              {busy ? 'Running…' : 'Run again'}
-            </button>
-            <button
-              type="button"
-              onClick={() => void reopen()}
-              disabled={busy}
-              className="rounded-lg bg-white/10 px-2.5 py-1 text-xs text-white/70 transition-colors hover:bg-white/20 hover:text-white disabled:opacity-40"
-            >
-              Reopen
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Action Required section */}
-      {groups.actionRequired.length > 0 && (
-        <Section title="Action Required">
-          {groups.actionRequired.map((email) => (
-            <ReviewCard
-              key={email.email_id}
-              email={email}
-              isExpanded={expandedId === email.email_id}
-              onToggle={() => toggleCard(email.email_id)}
-            >
-              {/* Action buttons only shown when review is pending */}
-              {isPending && (
-                <>
-                  {email.draft_id !== null && (
-                    <button
-                      type="button"
-                      onClick={() => setActivePanel('drafts')}
-                      className="rounded-lg bg-white/10 px-3 py-1.5 text-xs text-white/80 transition-colors hover:bg-white/15"
-                    >
-                      View draft reply
-                    </button>
-                  )}
-                  {email.calendar_suggestion?.detected && (
-                    <button
-                      type="button"
-                      onClick={() => addToCalendar(email)}
-                      className="flex items-center gap-1.5 rounded-lg bg-sky-500/20 px-3 py-1.5 text-xs text-sky-200 transition-colors hover:bg-sky-500/30"
-                    >
-                      <FiCalendar size={13} /> Add to calendar
-                    </button>
-                  )}
-                </>
-              )}
-            </ReviewCard>
-          ))}
-        </Section>
-      )}
-
-      {/* FYI section */}
-      {groups.fyi.length > 0 && (
-        <Section title="FYI">
-          {groups.fyi.map((email) => (
-            <ReviewCard
-              key={email.email_id}
-              email={email}
-              isExpanded={expandedId === email.email_id}
-              onToggle={() => toggleCard(email.email_id)}
-            >
-              {isPending && (
-                <span className="text-xs text-white/30">Archived automatically.</span>
-              )}
-            </ReviewCard>
-          ))}
-        </Section>
-      )}
-
-      {/* Cleaned Up section */}
-      {(groups.trashed.length > 0 || groups.archivedCount > 0) && (
-        <Section title="Cleaned Up">
-          <p className="px-1 text-xs text-white/40">
-            {groups.trashed.length} email{groups.trashed.length === 1 ? '' : 's'} trashed ·{' '}
-            {groups.archivedCount} archived
-          </p>
-        </Section>
-      )}
-
-      {review.emails.length === 0 && (
-        <p className="py-6 text-center text-sm text-white/40">
-          No new emails were reviewed today.
-        </p>
-      )}
-    </motion.div>
-  )
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="flex flex-col gap-2">
-      <h4 className="sticky top-0 z-10 bg-[#0d0d0f]/95 py-1 text-xs font-semibold uppercase tracking-wide text-white/40 backdrop-blur">
-        {title}
-      </h4>
-      {children}
-    </div>
-  )
-}
-
-function ReviewCard({
-  email,
-  isExpanded,
-  onToggle,
-  children,
-}: {
-  email: ReviewEmail
-  isExpanded: boolean
-  onToggle: () => void
-  children?: React.ReactNode
-}) {
-  return (
-    <div className="overflow-hidden rounded-2xl border border-white/10 bg-white/5">
-      {/* Collapsed header — always visible, click to expand */}
-      <button
-        type="button"
-        onClick={onToggle}
-        className="flex w-full items-start gap-2 px-4 py-3 text-left"
-      >
-        <FiMail size={14} className="mt-0.5 shrink-0 text-white/40" />
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-white">
-            {email.subject || '(no subject)'}
-          </p>
-          <p className="truncate text-xs text-white/40">{email.from || 'Unknown sender'}</p>
-          {!isExpanded && email.summary && (
-            <p className="mt-1 line-clamp-2 text-xs text-white/60">{email.summary}</p>
-          )}
-        </div>
-        <FiChevronDown
-          size={14}
-          className={`mt-0.5 shrink-0 text-white/30 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
-        />
-      </button>
-
-      {/* Expanded detail */}
-      <AnimatePresence initial={false}>
-        {isExpanded && (
-          <motion.div
-            key="detail"
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2, ease: 'easeInOut' }}
-            className="overflow-hidden"
-          >
-            <div className="flex flex-col gap-2 border-t border-white/[0.06] px-4 pb-3 pt-2">
-              <div className="flex flex-col gap-0.5 text-xs text-white/40">
-                {email.from && (
-                  <p>
-                    <span className="text-white/30">From </span>
-                    {email.from}
-                  </p>
-                )}
-                {email.received_at && (
-                  <p>
-                    <span className="text-white/30">Received </span>
-                    {formatReceived(email.received_at)}
-                  </p>
-                )}
-              </div>
-              {email.summary && (
-                <p className="text-xs leading-relaxed text-white/60">{email.summary}</p>
-              )}
-              <p className="text-xs text-white/40">
-                Suggested action:{' '}
-                <span className="text-white/60">{suggestedAction(email)}</span>
-              </p>
-              {children && (
-                <div className="mt-1 flex flex-wrap items-center gap-2">{children}</div>
-              )}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+    </li>
   )
 }
 

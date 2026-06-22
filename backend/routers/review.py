@@ -10,6 +10,7 @@ import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +21,18 @@ from services.tasks import get_task
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/review", tags=["review"])
+
+
+class ReviewApprovePayload(BaseModel):
+    """Per-email classification overrides chosen by the user in the Review UI.
+
+    Keys are email_id values (as strings — JSON object keys are always strings);
+    values are the final classification the user selected ('keep', 'archive',
+    'trash'). Any email_id not present here keeps the auto-triage classification
+    stored in afternoon_reviews.emails_json.
+    """
+
+    overrides: dict[str, str] = {}
 
 
 async def _today_review(db: AsyncSession) -> dict | None:
@@ -62,8 +75,15 @@ async def trigger_review(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/approve")
-async def approve_review(db: AsyncSession = Depends(get_db)):
+async def approve_review(
+    payload: ReviewApprovePayload = ReviewApprovePayload(),
+    db: AsyncSession = Depends(get_db),
+):
     """Apply today's review: push triage to Gmail, save summaries, mark approved.
+
+    The frontend may have reclassified individual emails via dropdowns; those
+    are sent as ``payload.overrides`` (email_id → classification) and merged
+    on top of the auto-triage result before any Gmail mutations run.
 
     Queued draft replies already live in the Drafts panel (generated as pending),
     so approval only needs to write each email's classification, apply triage per
@@ -73,7 +93,14 @@ async def approve_review(db: AsyncSession = Depends(get_db)):
     if not review:
         raise HTTPException(status_code=404, detail="No review for today")
 
-    emails = review["emails"]
+    emails = list(review["emails"])  # shallow copy so we can mutate safely
+
+    # Apply user overrides on top of the stored auto-triage classifications.
+    if payload.overrides:
+        for item in emails:
+            key = str(item.get("email_id", ""))
+            if key in payload.overrides:
+                item["classification"] = payload.overrides[key]
 
     # Write each reviewed email's classification into emails.triage_status, and
     # collect the accounts involved so triage can be applied per account.
