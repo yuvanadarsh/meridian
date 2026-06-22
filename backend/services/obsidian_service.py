@@ -49,6 +49,37 @@ _HEADING = re.compile(r"^#\s+(.+)$", re.MULTILINE)
 # Cache: hash(text) → extracted entity list so identical text isn't re-sent to Claude.
 _wikilink_cache: dict[int, list[str]] = {}
 
+_WIKILINK_STOPWORDS = {
+    "what", "that", "this", "with", "from", "have", "been", "will",
+    "your", "their", "just", "doing", "about", "into", "over", "also",
+    "some", "they", "when", "where", "here", "there", "then", "than",
+    "more", "its", "our", "est", "the", "and", "for", "but", "not",
+    "are", "was", "has", "had", "can", "could", "would", "should",
+    "may", "might", "shall", "must", "did", "does", "done", "let",
+    "got", "get", "set", "put", "run", "ran", "say", "said",
+    "see", "seen", "make", "made", "take", "took", "come", "came",
+    "good", "great", "new", "old", "big", "small", "first", "last",
+    "next", "back", "even", "well", "still", "too", "very", "only",
+    "both", "each", "few", "many", "most", "other", "such",
+    "same", "own", "right", "left", "high", "low", "long", "short",
+    "sure", "real", "full", "free", "open", "close", "late", "early",
+}
+
+
+def _filter_wikilinks(links: list[str]) -> list[str]:
+    """Drop stopwords, short tokens, and pure-numeric strings from wikilinks."""
+    filtered = []
+    for link in links:
+        if len(link) < 4:
+            continue
+        if link.lower() in _WIKILINK_STOPWORDS:
+            continue
+        if not any(c.isalpha() for c in link):
+            continue
+        filtered.append(link)
+    return filtered
+
+
 _ENTITY_EXTRACTION_PROMPT = """\
 Extract named entities from this text that would make meaningful Obsidian wikilinks.
 Only include: proper nouns, project names, organization names, product names, place names, and people's names.
@@ -101,7 +132,8 @@ async def extract_wikilinks(text: str) -> list[str]:
         if not raw or raw == "[]":
             return []
         parsed = json.loads(raw)
-        links = [str(item) for item in parsed if isinstance(item, str) and len(item) > 2][:8]
+        raw_links = [str(item) for item in parsed if isinstance(item, str)]
+        links = _filter_wikilinks(raw_links)[:8]
     except Exception:
         logger.exception("Claude Haiku wikilink extraction failed — returning no links")
         links = []
