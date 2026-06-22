@@ -55,13 +55,6 @@ export function ConnectionsPanel() {
     Record<number, { processed: number; total: number; done: boolean }>
   >({})
 
-  const [exportingContacts, setExportingContacts] = useState(false)
-  const [contactsProgress, setContactsProgress] = useState<{
-    processed: number
-    total: number
-    done: boolean
-  } | null>(null)
-
   // Thread build state per account
   const [threadCounts, setThreadCounts] = useState<
     Record<number, { processed: number; total: number }>
@@ -75,14 +68,25 @@ export function ConnectionsPanel() {
     try {
       const loaded = await api.getAccounts()
       setAccounts(loaded)
-      const counts = await Promise.all(
-        loaded.map((a) => api.getThreadsCount(a.id).catch(() => ({ processed: 0, total: 0 }))),
-      )
+      const [counts, obsidianProgresses] = await Promise.all([
+        Promise.all(
+          loaded.map((a) => api.getThreadsCount(a.id).catch(() => ({ processed: 0, total: 0 }))),
+        ),
+        Promise.all(
+          loaded.map((a) =>
+            api.getObsidianExportProgress(a.id).catch(() => ({ processed: 0, total: 0, done: false })),
+          ),
+        ),
+      ])
       const countMap: Record<number, { processed: number; total: number }> = {}
+      const obsidianMap: Record<number, { processed: number; total: number; done: boolean }> = {}
       loaded.forEach((a, i) => {
         countMap[a.id] = counts[i]
+        const op = obsidianProgresses[i]
+        obsidianMap[a.id] = { processed: op.processed, total: op.total, done: op.done ?? false }
       })
       setThreadCounts(countMap)
+      setObsidianProgress(obsidianMap)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load accounts')
     } finally {
@@ -225,34 +229,6 @@ export function ConnectionsPanel() {
     }
   }
 
-  const exportContactsToObsidian = async () => {
-    setExportingContacts(true)
-    setContactsProgress({ processed: 0, total: 0, done: false })
-    try {
-      await api.exportContactsToObsidian()
-      const poll = setInterval(async () => {
-        try {
-          const progress = await api.getContactsObsidianExportProgress()
-          setContactsProgress({
-            processed: progress.processed,
-            total: progress.total,
-            done: progress.done ?? false,
-          })
-          if (progress.done) {
-            clearInterval(poll)
-            setExportingContacts(false)
-          }
-        } catch {
-          clearInterval(poll)
-          setExportingContacts(false)
-        }
-      }, 2000)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Contacts export failed')
-      setExportingContacts(false)
-    }
-  }
-
   const toggleAccordion = (accountId: number) => {
     setOpenAccordionId((prev) => (prev === accountId ? null : accountId))
   }
@@ -292,10 +268,11 @@ export function ConnectionsPanel() {
             : threadCount && threadCount.processed > 0
               ? `${threadCount.processed} threads built`
               : 'No threads built'
+          const isExported = (obsidianProg?.processed ?? 0) > 0 || (obsidianProg?.total ?? 0) > 0
           const obsidianStatus = isExportingObsidian && obsidianProg
             ? `Writing… ${obsidianProg.processed} / ${obsidianProg.total}`
-            : obsidianProg?.done
-              ? 'In Obsidian ✓'
+            : isExported
+              ? `${obsidianProg!.total} notes in vault`
               : 'Not exported'
           const calendarStatus = calendarSyncedId === account.id
             ? 'Synced just now'
@@ -462,7 +439,7 @@ export function ConnectionsPanel() {
                               <span className="h-2.5 w-2.5 animate-spin rounded-full border border-white/40 border-t-white/70" />
                               Exporting…
                             </>
-                          ) : obsidianProg?.done ? (
+                          ) : isExported ? (
                             'Re-export'
                           ) : (
                             'Export to Obsidian'
@@ -545,22 +522,6 @@ export function ConnectionsPanel() {
       )}
 
       {accounts.length > 0 && <ContactsSection accounts={accounts} />}
-
-      {accounts.length > 0 && (
-        <button
-          type="button"
-          disabled={exportingContacts}
-          onClick={() => void exportContactsToObsidian()}
-          className="flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/60 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-40"
-        >
-          <HiOutlineDocumentText size={16} />
-          {exportingContacts && contactsProgress
-            ? `Writing contacts… ${contactsProgress.processed}/${contactsProgress.total}`
-            : contactsProgress?.done
-              ? '✓ Contacts in Obsidian'
-              : 'Export contacts to Obsidian'}
-        </button>
-      )}
     </div>
   )
 }

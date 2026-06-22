@@ -297,14 +297,27 @@ async def export_threads_to_obsidian(
 
 @router.get("/threads/obsidian-export/progress/{account_id}")
 async def obsidian_export_progress(account_id: int, db: AsyncSession = Depends(get_db)):
-    """Return the Obsidian thread export progress for an account."""
+    """Return the Obsidian thread export progress for an account.
+
+    Falls back to counting actual email notes in obsidian_notes so the row
+    correctly shows "In Obsidian ✓" for exports done before progress tracking
+    was introduced.
+    """
     from services import settings_service
 
     progress_key = f"obsidian_export_progress_{account_id}"
     raw = await settings_service.get_value(db, progress_key)
-    if not raw:
-        return {"processed": 0, "total": 0, "done": False}
-    try:
-        return json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
-        return {"processed": 0, "total": 0, "done": False}
+    if raw:
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    # No stored progress — check whether email notes already exist in the vault.
+    notes_result = await db.execute(
+        text("SELECT count(*) AS count FROM obsidian_notes WHERE file_path LIKE '%/Emails/%'")
+    )
+    notes_count = notes_result.fetchone().count
+    if notes_count > 0:
+        return {"processed": notes_count, "total": notes_count, "done": True}
+    return {"processed": 0, "total": 0, "done": False}
