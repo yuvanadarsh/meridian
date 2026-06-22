@@ -3,7 +3,8 @@
 import json
 import logging
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
@@ -200,7 +201,8 @@ async def _calendar_context(db: AsyncSession) -> str:
 
     Fetches today's events and upcoming events (next 7 days) across every
     linked account. Returns empty string when there are no accounts or events
-    so nothing leaks into the system prompt.
+    so nothing leaks into the system prompt. Times are converted to the user's
+    configured timezone before formatting.
     """
     try:
         accounts = await gmail_service.list_accounts(db)
@@ -208,6 +210,17 @@ async def _calendar_context(db: AsyncSession) -> str:
         return ""
     if not accounts:
         return ""
+
+    # Resolve user timezone; fall back to calendar service default.
+    try:
+        tz_value = await settings_service.get_value(db, "timezone")
+        user_tz = ZoneInfo(tz_value or calendar_service.DEFAULT_TIMEZONE)
+    except Exception:
+        user_tz = ZoneInfo(calendar_service.DEFAULT_TIMEZONE)
+
+    def _to_local(dt: datetime) -> datetime:
+        """Convert a naive-UTC datetime to the user's local timezone."""
+        return dt.replace(tzinfo=timezone.utc).astimezone(user_tz)
 
     today = date.today()
     today_lines: list[str] = []
@@ -225,11 +238,11 @@ async def _calendar_context(db: AsyncSession) -> str:
             end = event["end_time"]
             title = event["title"] or "(untitled)"
             if start and end:
-                s = start.strftime("%I:%M %p").lstrip("0")
-                e = end.strftime("%I:%M %p").lstrip("0")
+                s = _to_local(start).strftime("%I:%M %p").lstrip("0")
+                e = _to_local(end).strftime("%I:%M %p").lstrip("0")
                 today_lines.append(f"- {s} – {e}: {title}")
             elif start:
-                today_lines.append(f"- {start.strftime('%I:%M %p').lstrip('0')}: {title}")
+                today_lines.append(f"- {_to_local(start).strftime('%I:%M %p').lstrip('0')}: {title}")
             else:
                 today_lines.append(f"- {title}")
 
@@ -237,8 +250,9 @@ async def _calendar_context(db: AsyncSession) -> str:
             start = event["start_time"]
             title = event["title"] or "(untitled)"
             # Exclude events already shown in today's block.
-            if start and start.date() > today:
-                upcoming_lines.append(f"- {start.strftime('%B %-d')}: {title}")
+            local_start = _to_local(start) if start else None
+            if local_start and local_start.date() > today:
+                upcoming_lines.append(f"- {local_start.strftime('%B %-d')}: {title}")
 
     if not today_lines and not upcoming_lines:
         return ""
@@ -404,9 +418,6 @@ def _conflict_title(row) -> str:
 
 def _conflict_when(row) -> str:
     """Render a stored (UTC-naive) conflict start time in the user's local time."""
-    from datetime import timezone
-    from zoneinfo import ZoneInfo
-
     start = getattr(row, "start_time", None)
     if not isinstance(start, datetime):
         return "that time"
