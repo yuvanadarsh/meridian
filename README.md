@@ -111,6 +111,30 @@ calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
 
 ---
 
+## Features (Phase 5B — Scheduling, Review, and Intelligence)
+
+- **Task registry** — background work follows a single `BaseTask` pattern in
+  `backend/services/tasks/`. Adding a scheduled task is one subclass file plus one
+  registry entry; the registry also drives the "add task" form in Settings
+- **Dynamic scheduler** — a generic scheduler reads the `scheduled_tasks` table
+  instead of hardcoded times, so any task can be enabled/disabled and rescheduled
+  from the Settings panel. Each run records its status and summary
+- **Gmail polling** — new mail is fetched from every connected account every 15
+  minutes with no AI calls, stored as `pending` for review (same MIME parsing,
+  batching, and 429 backoff as the full sweep)
+- **Afternoon email review** — once a day, the day's pending emails are triaged,
+  summarized, and (when a reply seems expected) given a queued draft. Nothing is
+  applied to Gmail until you approve
+- **Daily Review panel** — a newspaper-style digest grouped into Action Required,
+  FYI, and Cleaned Up. Approve all pushes triage to Gmail and saves summaries to
+  Obsidian; Dismiss takes no action
+- **Calendar conflict detection** — creating an event from chat checks for
+  overlapping events first and asks you to confirm before scheduling over them
+- **Event suggestions from email** — emails that read like a meeting proposal get
+  an "Add to calendar" button in the review panel that opens the chat pre-filled
+
+---
+
 ## Prerequisites
 
 - macOS or Linux
@@ -232,9 +256,10 @@ your host PostgreSQL via `host.docker.internal`.
 
 ## Roadmap
 
+- [x] Calendar conflict detection (Phase 5B)
+- [x] Scheduled background tasks with a configurable scheduler (Phase 5B)
 - [ ] Email send from Drafts panel via Gmail API
 - [ ] Connect multiple Gmail accounts through the existing onboarding UI
-- [ ] Calendar conflict detection across accounts
 - [ ] Setup wizard for first-time users
 - [ ] Docker Hub image for one-command install
 - [ ] Always-on wake word (currently push-to-talk only)

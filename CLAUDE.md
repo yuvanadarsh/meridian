@@ -498,9 +498,20 @@ docs(readme): add setup, oauth, and local development instructions
 | **3 — Intelligence**         | Email drafting in user's voice, news digest, stock watchlist, web search                    |
 | **4 — Memory & intelligence**| Threading, hybrid search, contacts graph, multi-provider AI, scheduled digest               |
 | **5A — Memory unification**  | Email threads + contacts written to Obsidian; tiered RAG with Obsidian-first retrieval      |
-| **5B — Always-on voice**     | Wake word detection (future)                                                                |
+| **5B — Scheduling & review** | Task registry + dynamic scheduler, 15-min Gmail polling, afternoon email review + Daily Review panel, calendar conflict detection, email-driven event suggestions |
+| **5C — Always-on voice**     | Wake word detection (future)                                                                |
 
-**Current phase: 5A complete**
+**Current phase: 5B complete**
+
+### Task registry (Phase 5B)
+
+Background tasks live in `backend/services/tasks/`, each a `BaseTask` subclass with
+`run()`, `name`, `description`, and `default_schedule`. Register a new task by
+adding it to `TASK_REGISTRY` in `services/tasks/__init__.py`. The generic
+`run_task_scheduler` in `main.py` reads the `scheduled_tasks` table (configured
+from Settings) — `email_poll` runs on its own 15-minute interval; clock-based
+tasks run at their `schedule_time` in the user's timezone. The afternoon review
+never mutates Gmail; the user approves in the Daily Review panel first.
 
 ---
 

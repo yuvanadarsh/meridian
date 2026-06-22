@@ -66,9 +66,11 @@ async def update_provider(
     payload: ProviderUpdate,
     db: AsyncSession = Depends(get_db),
 ):
-    """Set a provider's key/base_url/models, and optionally make it active."""
-    if provider not in KNOWN_PROVIDERS:
-        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
+    """Set a provider's key/base_url/models, and optionally make it active.
+
+    Known providers use built-in base URLs; custom names require an explicit
+    base_url so the OpenAI-compatible router knows where to send requests.
+    """
     await provider_service.upsert_provider(
         db,
         provider,
@@ -85,8 +87,6 @@ async def update_provider(
 @router.delete("/providers/{provider}/key")
 async def delete_provider_key(provider: str, db: AsyncSession = Depends(get_db)):
     """Remove a provider's stored API key."""
-    if provider not in KNOWN_PROVIDERS:
-        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
     await provider_service.delete_key(db, provider)
     return {"providers": await provider_service.list_providers(db)}
 

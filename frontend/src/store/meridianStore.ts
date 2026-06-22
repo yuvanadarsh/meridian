@@ -16,6 +16,7 @@ export type ActivePanel =
   | 'connections'
   | 'brief'
   | 'supercharge'
+  | 'review'
   | null
 
 interface MeridianStore {
@@ -39,6 +40,8 @@ interface MeridianStore {
   onboardingAccountId: number | null
   /** Account whose completed triage results are being reviewed from the Connections panel. */
   triageReviewAccountId: number | null
+  /** Text to pre-fill the chat input with the next time the chat opens. */
+  chatPrefill: string | null
 
   setOrbState: (state: OrbState) => void
   addMessage: (msg: ChatMessage) => void
@@ -52,6 +55,7 @@ interface MeridianStore {
   setJustConnectedEmail: (email: string | null) => void
   setOnboardingAccountId: (id: number | null) => void
   setTriageReviewAccountId: (id: number | null) => void
+  setChatPrefill: (text: string | null) => void
 }
 
 export const useMeridianStore = create<MeridianStore>((set) => ({
@@ -65,6 +69,7 @@ export const useMeridianStore = create<MeridianStore>((set) => ({
   justConnectedEmail: null,
   onboardingAccountId: null,
   triageReviewAccountId: null,
+  chatPrefill: null,
 
   setOrbState: (orbState) => set({ orbState }),
   addMessage: (msg) => set((state) => ({ messages: [...state.messages, msg] })),
@@ -77,4 +82,5 @@ export const useMeridianStore = create<MeridianStore>((set) => ({
   setJustConnectedEmail: (justConnectedEmail) => set({ justConnectedEmail }),
   setOnboardingAccountId: (onboardingAccountId) => set({ onboardingAccountId }),
   setTriageReviewAccountId: (triageReviewAccountId) => set({ triageReviewAccountId }),
+  setChatPrefill: (chatPrefill) => set({ chatPrefill }),
 }))

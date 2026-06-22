@@ -11,6 +11,7 @@ Vault ingestion and RAG retrieval build on this module in later steps.
 import asyncio
 import json
 import logging
+import os
 import re
 import shutil
 from datetime import datetime
@@ -179,6 +180,46 @@ async def append_exchange(
     return await asyncio.to_thread(_write)
 
 
+async def append_review_summaries(
+    summaries: list[dict], when: datetime | None = None
+) -> bool:
+    """Append afternoon-review email summaries to today's daily note.
+
+    Each item is ``{"subject", "from", "summary"}``. They're written as bullets
+    under "## Ideas & Notes" so the day's reviewed mail lands in the knowledge
+    layer. Returns False (no-op) when no vault is configured or there's nothing
+    to write.
+    """
+    vault = vault_path()
+    if vault is None or not summaries:
+        return False
+
+    when = when or datetime.now()
+
+    def _write() -> bool:
+        try:
+            daily_dir = vault / "Daily"
+            daily_dir.mkdir(parents=True, exist_ok=True)
+            note_path = daily_dir / f"{when.strftime('%Y-%m-%d')}.md"
+            content = (
+                note_path.read_text(encoding="utf-8") if note_path.exists() else _new_note(when)
+            )
+            block = "\n#### Afternoon review\n"
+            for item in summaries:
+                subject = (item.get("subject") or "(no subject)").strip()
+                sender = (item.get("from") or "").strip()
+                summary = (item.get("summary") or "").strip()
+                block += f"- **{subject}** — {sender}: {summary}\n"
+            content = _insert_into_section(content, "## Ideas & Notes", block)
+            note_path.write_text(content, encoding="utf-8")
+            return True
+        except OSError:
+            logger.exception("Failed to write afternoon review summaries to daily note")
+            return False
+
+    return await asyncio.to_thread(_write)
+
+
 # ---------------------------------------------------------------------------
 # Vault ingestion — pull .md files into PostgreSQL for RAG retrieval
 # ---------------------------------------------------------------------------
@@ -221,6 +262,36 @@ async def ingest_note(md_file: Path, db: AsyncSession) -> None:
         },
     )
     await db.commit()
+
+
+async def cleanup_vault_root_stubs() -> None:
+    """Delete stray ``.md`` files in the vault root left by older export bugs.
+
+    Early versions wrote contact and thread notes directly to the vault root
+    instead of the ``Contacts/`` and ``Emails/`` subfolders. This removes those
+    leftovers on startup, keeping only ``Welcome.md``. Subdirectories are never
+    touched.
+    """
+    vault = vault_path()
+    if vault is None:
+        return
+
+    KEEP_FILES = {"Welcome.md"}
+
+    def _cleanup() -> int:
+        removed = 0
+        for item in os.listdir(vault):
+            item_path = vault / item
+            if item_path.is_file() and item.endswith(".md") and item not in KEEP_FILES:
+                try:
+                    item_path.unlink()
+                    logger.info("Removed vault root stub: %s", item)
+                    removed += 1
+                except OSError:
+                    logger.warning("Could not remove vault root stub: %s", item)
+        return removed
+
+    await asyncio.to_thread(_cleanup)
 
 
 async def scan_vault_on_startup() -> None:
@@ -531,6 +602,15 @@ async def write_thread_to_vault(
         except Exception:
             contact_name = contact_email.split("@")[0]
 
+    # Strip the email-address portion if the name still carries it, e.g.
+    # "Max Scribner <max.scribner@assetliving.com>" → "Max Scribner". Without
+    # this the directory name becomes "Max Scribner maxscribner" and the same
+    # person ends up with two folders.
+    if contact_name and "<" in contact_name:
+        display_part = contact_name[: contact_name.index("<")].strip()
+        if display_part:
+            contact_name = display_part
+
     # Generate AI summary
     messages_text = "\n\n".join([
         f"From: {m.get('from_address', '')}\n{(m.get('body_text') or '')[:300]}"
@@ -551,9 +631,20 @@ async def write_thread_to_vault(
     safe_subject = (
         re.sub(r"[^\w\s-]", "", subject)[:60].strip().replace(" ", "-") or "no-subject"
     )
-    contact_dir = re.sub(r"[^\w\s-]", "", contact_name)[:40].strip() or "Unknown"
+    safe_contact = re.sub(r"[^\w\s-]", "", contact_name)[:40].strip() or "Unknown"
 
-    dir_path = vault / "Emails" / contact_dir
+    # Reuse an existing folder whose normalized name matches, so a contact never
+    # gets two near-identical directories (e.g. "Max-Scribner" vs "Max Scribner").
+    emails_dir = vault / "Emails"
+    normalized = re.sub(r"[^\w]", "", safe_contact).lower()
+    existing_dir: str | None = None
+    if emails_dir.exists():
+        for entry in await asyncio.to_thread(lambda: list(os.listdir(emails_dir))):
+            if re.sub(r"[^\w]", "", entry).lower() == normalized:
+                existing_dir = entry
+                break
+
+    dir_path = emails_dir / (existing_dir or safe_contact)
     await asyncio.to_thread(dir_path.mkdir, parents=True, exist_ok=True)
     file_path = dir_path / f"{safe_subject}.md"
 
@@ -755,9 +846,21 @@ async def write_contact_to_vault(
 
 
 async def export_contacts_to_obsidian_background() -> None:
-    """Write all contacts to the Obsidian vault (background task)."""
+    """Write all contacts to the Obsidian vault (background task).
+
+    Clears the ``Contacts/`` directory first so renamed or stale profiles from a
+    previous export don't linger alongside the freshly written ones.
+    """
     from db.database import AsyncSessionLocal
     from services import settings_service
+
+    # Wipe the Contacts/ subtree so re-exports always start clean.
+    contacts_root = vault_path()
+    if contacts_root is not None:
+        contacts_root = contacts_root / "Contacts"
+        if contacts_root.exists():
+            await asyncio.to_thread(shutil.rmtree, str(contacts_root))
+            logger.info("Cleared Contacts/ directory for clean re-export")
 
     async with AsyncSessionLocal() as db:
         contacts_result = await db.execute(

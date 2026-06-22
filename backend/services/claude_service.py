@@ -115,6 +115,9 @@ def _action_protocol(accounts: list[dict], *, include_draft: bool = False) -> st
         'CALENDAR_CREATE:{"account_id":' + str(default_id) + ',"title":"...","start":"2026-06-19T15:00:00","end":"2026-06-19T16:00:00","description":""}\n'
         "Times are local (America/New_York), ISO 8601, no timezone suffix. Default events to one "
         "hour when the user gives only a start time.\n"
+        "If a previous event creation warned about a scheduling conflict and the user now confirms "
+        "they want it anyway, respond with ONLY this token on the first line, then a confirmation:\n"
+        "CALENDAR_CONFIRM:{}\n"
         "Only emit an action token when the user clearly requests that action."
     )
 

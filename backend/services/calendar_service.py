@@ -226,6 +226,47 @@ async def get_today(account_id: int, db: AsyncSession) -> list[dict]:
     return [dict(row) for row in result.mappings().all()]
 
 
+def _local_to_utc_naive(dt: datetime) -> datetime:
+    """Interpret a naive datetime as DEFAULT_TIMEZONE local and return UTC-naive.
+
+    Stored ``calendar_events`` times are UTC-naive, while events created from chat
+    arrive as local ISO strings without a suffix — this aligns the two for
+    overlap comparison. Already-aware datetimes are converted directly.
+    """
+    from zoneinfo import ZoneInfo
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo(DEFAULT_TIMEZONE))
+    return _utc_naive(dt)
+
+
+async def check_conflicts(
+    account_id: int, start_time: datetime, end_time: datetime, db: AsyncSession
+) -> list:
+    """Return existing events that overlap [start_time, end_time) for an account.
+
+    Times are treated as DEFAULT_TIMEZONE local and normalized to UTC-naive to
+    match the stored columns. Two events overlap when one starts before the other
+    ends and vice versa.
+    """
+    start_utc = _local_to_utc_naive(start_time)
+    end_utc = _local_to_utc_naive(end_time)
+    result = await db.execute(
+        text(
+            """
+            SELECT title, start_time, end_time
+            FROM calendar_events
+            WHERE account_id = :account_id
+              AND start_time < :end_time
+              AND end_time > :start_time
+            ORDER BY start_time
+            """
+        ),
+        {"account_id": account_id, "start_time": start_utc, "end_time": end_utc},
+    )
+    return result.fetchall()
+
+
 async def get_upcoming(account_id: int, db: AsyncSession, days: int = 7) -> list[dict]:
     """Return events from now through the next ``days`` days, sorted by start time."""
     now = datetime.utcnow()

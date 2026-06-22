@@ -141,6 +141,8 @@ export interface SuperchargeImport {
 export interface AIProvider {
   provider: string
   has_key: boolean
+  // 'configured' = stored in DB, 'env' = supplied via .env, null = not set.
+  key_source?: 'configured' | 'env' | null
   base_url: string | null
   is_active: boolean
   model_chat: string | null
@@ -166,6 +168,67 @@ export interface Contact {
   first_contacted: string | null
   last_contacted: string | null
   topics: string[] | null
+}
+
+export interface CalendarSuggestion {
+  detected: boolean
+  email_id: number
+  from: string | null
+  subject: string | null
+}
+
+export interface ReviewEmail {
+  email_id: number
+  subject: string | null
+  from: string | null
+  classification: 'keep' | 'archive' | 'trash'
+  summary: string
+  needs_reply: boolean
+  draft_id: number | null
+  received_at: string | null
+  calendar_suggestion?: CalendarSuggestion
+}
+
+export interface DailyReview {
+  review_date: string
+  emails: ReviewEmail[]
+  status: 'pending' | 'approved' | 'dismissed'
+  approved_at: string | null
+  updated_at: string | null
+}
+
+export interface ScheduledTask {
+  id: number
+  task_key: string
+  display_name: string | null
+  schedule_time: string
+  schedule_days: string
+  enabled: boolean
+  last_run_at: string | null
+  last_run_status: string | null
+  last_run_summary: string | null
+}
+
+export interface AvailableTask {
+  key: string
+  name: string
+  description: string
+  default_schedule: string
+  default_days: string
+}
+
+export interface TaskCreate {
+  task_key: string
+  display_name?: string
+  schedule_time?: string
+  schedule_days?: string
+}
+
+export interface TaskPatch {
+  display_name?: string
+  schedule_time?: string
+  schedule_days?: string
+  enabled?: boolean
 }
 
 export const api = {
@@ -345,4 +408,44 @@ export const api = {
     request<{ processed: number; total: number; done?: boolean }>(
       '/contacts/obsidian-export/progress',
     ),
+
+  // Daily review
+  getReview: () => request<{ review: DailyReview | null }>('/review/today'),
+  triggerReview: () =>
+    request<{ result: { status: string; summary: string }; review: DailyReview | null }>(
+      '/review/trigger',
+    ),
+  approveReview: (overrides: Record<string, string> = {}) =>
+    request<{
+      status: string
+      applied: { trashed: number; archived: number }
+      review: DailyReview | null
+    }>('/review/approve', {
+      method: 'POST',
+      body: JSON.stringify({ overrides }),
+    }),
+  dismissReview: () =>
+    request<{ status: string; review: DailyReview | null }>('/review/dismiss', {
+      method: 'POST',
+    }),
+  reopenReview: () =>
+    request<{ status: string; review: DailyReview | null }>('/review/reopen', {
+      method: 'POST',
+    }),
+
+  // Scheduled tasks
+  getTasks: () => request<{ tasks: ScheduledTask[] }>('/tasks'),
+  getAvailableTasks: () => request<{ tasks: AvailableTask[] }>('/tasks/available'),
+  createTask: (payload: TaskCreate) =>
+    request<ScheduledTask>('/tasks', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateTask: (id: number, patch: TaskPatch) =>
+    request<ScheduledTask>(`/tasks/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+  deleteTask: (id: number) =>
+    request<{ deleted: boolean; id: number }>(`/tasks/${id}`, { method: 'DELETE' }),
 }

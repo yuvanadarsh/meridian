@@ -17,6 +17,9 @@ interface ChatModalProps {
   voiceSupported: boolean
   recording: boolean
   onToggleMic: () => void
+  /** Text to drop into the input when the modal opens (e.g. from a suggestion). */
+  prefill?: string | null
+  onPrefillConsumed?: () => void
 }
 
 // Textarea growth bounds: one row minimum, six rows maximum before scrolling.
@@ -38,6 +41,8 @@ export function ChatModal({
   voiceSupported,
   recording,
   onToggleMic,
+  prefill,
+  onPrefillConsumed,
 }: ChatModalProps) {
   const [value, setValue] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -48,6 +53,16 @@ export function ChatModal({
     const id = window.setTimeout(() => textareaRef.current?.focus(), 60)
     return () => window.clearTimeout(id)
   }, [open])
+
+  // Drop any pending prefill text into the input once when the modal opens.
+  useEffect(() => {
+    if (open && prefill) {
+      setValue(prefill)
+      onPrefillConsumed?.()
+      requestAnimationFrame(resize)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, prefill])
 
   // Close on Escape.
   useEffect(() => {

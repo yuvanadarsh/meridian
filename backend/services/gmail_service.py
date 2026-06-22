@@ -631,6 +631,43 @@ async def sweep_account(
     return {"fetched": fetched, "stored": stored, "skipped": skipped}
 
 
+async def fetch_new_emails_since(
+    account_id: int, since: datetime, db: AsyncSession
+) -> list[int]:
+    """Fetch and store messages newer than ``since`` for one account.
+
+    Used by the 15-minute email poll task. Unlike :func:`sweep_account`, this
+    makes NO Claude calls — it only pulls new mail into the ``emails`` table as
+    ``pending`` for later review. Reuses the same MIME parsing, batching, 0.1s
+    spacing, and 429 backoff as the full sweep. Returns the new email row IDs.
+    """
+    creds = await load_credentials(db, account_id)
+    service = await asyncio.to_thread(
+        lambda: build("gmail", "v1", credentials=creds, cache_discovery=False)
+    )
+
+    # Gmail's after: filter takes a Unix timestamp (seconds).
+    query = f"after:{int(since.timestamp())}"
+    message_ids = await _list_message_ids(service, query=query)
+
+    new_ids: list[int] = []
+    for start in range(0, len(message_ids), SWEEP_BATCH_SIZE):
+        batch = message_ids[start : start + SWEEP_BATCH_SIZE]
+        for gmail_id in batch:
+            try:
+                message = await fetch_with_backoff(service, gmail_id)
+            except Exception as exc:  # noqa: BLE001 — log and skip one bad message
+                logger.error("Email poll failed to fetch %s: %s", gmail_id, exc)
+                continue
+            stored = await _store_email(db, account_id, message)
+            if stored["id"] is not None:
+                new_ids.append(stored["id"])
+            await asyncio.sleep(SWEEP_DELAY_SECONDS)
+
+    logger.info("Email poll for account %s: %s new emails", account_id, len(new_ids))
+    return new_ids
+
+
 async def run_sweep_background(
     account_id: int,
     *,
