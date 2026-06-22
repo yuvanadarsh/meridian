@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { FiCheck, FiPlus, FiTrash2, FiX } from 'react-icons/fi'
-import { HiChevronDown, HiOutlineCalendar, HiOutlineCircleStack, HiOutlineDocumentText } from 'react-icons/hi2'
+import {
+  HiChevronDown,
+  HiOutlineCalendar,
+  HiOutlineCircleStack,
+  HiOutlineDocumentText,
+  HiOutlineEnvelope,
+} from 'react-icons/hi2'
 
 import { api } from '../../api/client'
 import type { GmailAccount } from '../../api/client'
@@ -21,9 +27,10 @@ function relativeTime(iso: string | null): string | null {
 }
 
 /**
- * Lists every connected Google account with inline label editing, a sweep
- * shortcut into onboarding, and removal. Each account has an expandable
- * calendar-sync accordion. Only one accordion can be open at a time.
+ * Lists every connected Google account. The collapsed row shows only the
+ * account label, email, and sync status. Expanding reveals four integration
+ * rows (Sweep, Threads, Obsidian, Calendar) each with its own action button
+ * and live status. Only one accordion is open at a time.
  */
 export function ConnectionsPanel() {
   const setOnboardingAccountId = useMeridianStore((state) => state.setOnboardingAccountId)
@@ -39,19 +46,26 @@ export function ConnectionsPanel() {
   const [adding, setAdding] = useState(false)
   const [newLabel, setNewLabel] = useState('')
   const [openAccordionId, setOpenAccordionId] = useState<number | null>(null)
+
   const [syncingId, setSyncingId] = useState<number | null>(null)
   const [calendarSyncedId, setCalendarSyncedId] = useState<number | null>(null)
+
   const [exportingObsidianId, setExportingObsidianId] = useState<number | null>(null)
   const [obsidianProgress, setObsidianProgress] = useState<
     Record<number, { processed: number; total: number; done: boolean }>
   >({})
+
   const [exportingContacts, setExportingContacts] = useState(false)
   const [contactsProgress, setContactsProgress] = useState<{
-    processed: number; total: number; done: boolean
+    processed: number
+    total: number
+    done: boolean
   } | null>(null)
 
-  // Thread build state per account: null = unknown, {processed,total} = known
-  const [threadCounts, setThreadCounts] = useState<Record<number, { processed: number; total: number }>>({})
+  // Thread build state per account
+  const [threadCounts, setThreadCounts] = useState<
+    Record<number, { processed: number; total: number }>
+  >({})
   const [buildingThreadsId, setBuildingThreadsId] = useState<number | null>(null)
   const threadPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -61,12 +75,13 @@ export function ConnectionsPanel() {
     try {
       const loaded = await api.getAccounts()
       setAccounts(loaded)
-      // Fetch initial thread counts for all accounts in parallel.
       const counts = await Promise.all(
-        loaded.map((a) => api.getThreadsCount(a.id).catch(() => ({ processed: 0, total: 0 })))
+        loaded.map((a) => api.getThreadsCount(a.id).catch(() => ({ processed: 0, total: 0 }))),
       )
       const countMap: Record<number, { processed: number; total: number }> = {}
-      loaded.forEach((a, i) => { countMap[a.id] = counts[i] })
+      loaded.forEach((a, i) => {
+        countMap[a.id] = counts[i]
+      })
       setThreadCounts(countMap)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load accounts')
@@ -164,7 +179,10 @@ export function ConnectionsPanel() {
     try {
       await api.syncCalendar(accountId)
       setCalendarSyncedId(accountId)
-      setTimeout(() => setCalendarSyncedId((prev) => (prev === accountId ? null : prev)), 2000)
+      setTimeout(
+        () => setCalendarSyncedId((prev) => (prev === accountId ? null : prev)),
+        2000,
+      )
       await load()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Calendar sync failed')
@@ -175,7 +193,10 @@ export function ConnectionsPanel() {
 
   const exportToObsidian = async (accountId: number) => {
     setExportingObsidianId(accountId)
-    setObsidianProgress((prev) => ({ ...prev, [accountId]: { processed: 0, total: 0, done: false } }))
+    setObsidianProgress((prev) => ({
+      ...prev,
+      [accountId]: { processed: 0, total: 0, done: false },
+    }))
     try {
       await api.exportThreadsToObsidian(accountId)
       const poll = setInterval(async () => {
@@ -255,25 +276,51 @@ export function ConnectionsPanel() {
           const isSyncing = syncingId === account.id
           const threadCount = threadCounts[account.id]
           const isBuilding = buildingThreadsId === account.id
-          const threadsBuilt = threadCount && threadCount.total > 0 && threadCount.processed >= threadCount.total
-          // Show "Build threads" for accounts that have been swept and have completed triage.
-          const showBuildThreads = account.sweep_status === 'completed' && !!synced
+          const threadsBuilt =
+            threadCount &&
+            threadCount.total > 0 &&
+            threadCount.processed >= threadCount.total
+          const isExportingObsidian = exportingObsidianId === account.id
+          const obsidianProg = obsidianProgress[account.id]
+
+          // Derive integration status strings
+          const sweepStatus = synced ? `Last synced: ${synced}` : 'Never synced'
+          const threadStatus = isBuilding
+            ? threadCount && threadCount.total > 0
+              ? `Building… ${threadCount.processed} / ${threadCount.total}`
+              : 'Building…'
+            : threadCount && threadCount.processed > 0
+              ? `${threadCount.processed} threads built`
+              : 'No threads built'
+          const obsidianStatus = isExportingObsidian && obsidianProg
+            ? `Writing… ${obsidianProg.processed} / ${obsidianProg.total}`
+            : obsidianProg?.done
+              ? 'In Obsidian ✓'
+              : 'Not exported'
+          const calendarStatus = calendarSyncedId === account.id
+            ? 'Synced just now'
+            : synced
+              ? `Last synced: ${synced}`
+              : 'Never synced'
 
           return (
             <div
               key={account.id}
               className="overflow-hidden rounded-xl border border-white/10 bg-white/5"
             >
-              {/* Account row */}
-              <div className="flex items-center justify-between gap-3 px-4 py-3">
-                <div className="min-w-0">
+              {/* Collapsed header — label, email, sync status, trash, chevron */}
+              <div className="flex items-center gap-3 px-4 py-3">
+                {/* Account info (left, grows) */}
+                <div className="min-w-0 flex-1">
                   {editingId === account.id ? (
                     <div className="flex items-center gap-1.5">
                       <input
                         autoFocus
                         value={editLabel}
                         onChange={(event) => setEditLabel(event.target.value)}
-                        onKeyDown={(event) => event.key === 'Enter' && void saveLabel(account.id)}
+                        onKeyDown={(event) =>
+                          event.key === 'Enter' && void saveLabel(account.id)
+                        }
                         className="w-28 rounded-md border border-white/10 bg-white/5 px-2 py-0.5 text-sm text-white focus:border-white/30 focus:outline-none"
                         aria-label="Account label"
                       />
@@ -311,96 +358,15 @@ export function ConnectionsPanel() {
                   <div className="text-xs text-white/30">
                     {synced ? `Synced ${synced}` : 'Not swept yet'}
                     {threadCount && threadCount.processed > 0 && (
-                      <span className="ml-2 text-white/20">· {threadCount.processed} threads</span>
+                      <span className="ml-2 text-white/20">
+                        · {threadCount.processed} threads
+                      </span>
                     )}
                   </div>
                 </div>
 
-                <div className="flex shrink-0 items-center gap-2">
-                  {account.sweep_status === 'triage_complete' && (
-                    <button
-                      type="button"
-                      onClick={() => reviewTriage(account.id)}
-                      className="rounded-full border border-amber-400/25 px-3 py-1 text-xs text-amber-300/80 transition-colors hover:bg-amber-400/10 hover:text-amber-200"
-                    >
-                      Review triage
-                    </button>
-                  )}
-                  {synced && (() => {
-                    const prog = obsidianProgress[account.id]
-                    const isExporting = exportingObsidianId === account.id
-                    return (
-                      <button
-                        type="button"
-                        disabled={isExporting}
-                        onClick={() => void exportToObsidian(account.id)}
-                        className="flex items-center gap-1 rounded-full border border-white/15 px-3 py-1 text-xs text-white/80 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-40"
-                        title="Export email threads to Obsidian vault"
-                      >
-                        <HiOutlineDocumentText size={12} />
-                        {isExporting && prog
-                          ? `${prog.processed}/${prog.total}`
-                          : prog?.done
-                            ? '✓ In Obsidian'
-                            : 'Export to Obsidian'}
-                      </button>
-                    )
-                  })()}
-                  <button
-                    type="button"
-                    disabled={syncingId === account.id}
-                    onClick={() => void syncCalendar(account.id)}
-                    className="flex items-center gap-1 rounded-full border border-white/15 px-3 py-1 text-xs text-white/80 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-40"
-                    title="Sync calendar events"
-                  >
-                    {syncingId === account.id ? (
-                      <>
-                        <span className="h-3 w-3 animate-spin rounded-full border border-white/40 border-t-white/80" />
-                        Syncing
-                      </>
-                    ) : calendarSyncedId === account.id ? (
-                      'Synced ✓'
-                    ) : (
-                      <>
-                        <HiOutlineCalendar size={12} />
-                        Sync calendar
-                      </>
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => sweep(account.id)}
-                    className="rounded-full border border-white/15 px-3 py-1 text-xs text-white/80 transition-colors hover:bg-white/10 hover:text-white"
-                  >
-                    {synced ? 'Re-sweep' : 'Sweep'}
-                  </button>
-                  {showBuildThreads && (
-                    <button
-                      type="button"
-                      disabled={isBuilding}
-                      onClick={() => void buildThreadsForAccount(account.id)}
-                      className="flex items-center gap-1.5 rounded-full border border-white/15 px-3 py-1 text-xs text-white/80 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-50"
-                    >
-                      {isBuilding ? (
-                        <>
-                          <span className="h-3 w-3 animate-spin rounded-full border border-white/40 border-t-white/80" />
-                          {threadCount && threadCount.total > 0
-                            ? `Building... ${threadCount.processed} / ${threadCount.total}`
-                            : 'Building threads...'}
-                        </>
-                      ) : threadsBuilt ? (
-                        <>
-                          <HiOutlineCircleStack size={12} />
-                          Threads built ✓
-                        </>
-                      ) : (
-                        <>
-                          <HiOutlineCircleStack size={12} />
-                          Build threads
-                        </>
-                      )}
-                    </button>
-                  )}
+                {/* Right controls — only trash and expand */}
+                <div className="flex shrink-0 items-center gap-1">
                   <button
                     type="button"
                     aria-label={`Remove ${account.email}`}
@@ -411,7 +377,7 @@ export function ConnectionsPanel() {
                   </button>
                   <button
                     type="button"
-                    aria-label={isOpen ? 'Collapse calendar section' : 'Expand calendar section'}
+                    aria-label={isOpen ? 'Collapse integrations' : 'Expand integrations'}
                     onClick={() => toggleAccordion(account.id)}
                     className="flex h-7 w-7 items-center justify-center rounded-full text-white/40 transition-colors hover:bg-white/10 hover:text-white"
                   >
@@ -426,44 +392,107 @@ export function ConnectionsPanel() {
                 </div>
               </div>
 
-              {/* Calendar accordion */}
+              {/* Expanded integrations accordion */}
               <AnimatePresence initial={false}>
                 {isOpen && (
                   <motion.div
-                    key="calendar-accordion"
+                    key="integrations"
                     initial={{ height: 0, opacity: 0 }}
                     animate={{ height: 'auto', opacity: 1 }}
                     exit={{ height: 0, opacity: 0 }}
                     transition={{ duration: 0.2, ease: 'easeInOut' }}
                     className="overflow-hidden"
                   >
-                    <div className="flex items-center justify-between border-t border-white/[0.06] px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <HiOutlineCalendar size={14} className="shrink-0 text-white/50" />
-                        <div>
-                          <div className="text-xs font-medium text-white/70">
-                            Calendar Integration
-                          </div>
-                          <div className="text-xs text-white/30">
-                            {synced ? `Last synced: ${synced}` : 'Never synced'}
-                          </div>
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        disabled={isSyncing}
-                        onClick={() => void syncCalendar(account.id)}
-                        className="flex items-center gap-1.5 rounded-full border border-white/15 px-3 py-1 text-xs text-white/80 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-40"
+                    <div className="px-4 pb-3">
+                      {/* 1 — Sweep */}
+                      <IntegrationRow
+                        icon={<HiOutlineEnvelope className="h-4 w-4 text-white/40" />}
+                        name="Sweep"
+                        status={sweepStatus}
                       >
-                        {isSyncing ? (
-                          <>
-                            <span className="h-3 w-3 animate-spin rounded-full border border-white/40 border-t-white/80" />
-                            Syncing
-                          </>
+                        {account.sweep_status === 'triage_complete' ? (
+                          <ActionButton
+                            amber
+                            onClick={() => reviewTriage(account.id)}
+                          >
+                            Review triage
+                          </ActionButton>
                         ) : (
-                          'Sync now'
+                          <ActionButton onClick={() => sweep(account.id)}>
+                            {synced ? 'Re-sweep' : 'Sweep'}
+                          </ActionButton>
                         )}
-                      </button>
+                      </IntegrationRow>
+
+                      {/* 2 — Threads */}
+                      <IntegrationRow
+                        icon={<HiOutlineCircleStack className="h-4 w-4 text-white/40" />}
+                        name="Threads"
+                        status={threadStatus}
+                      >
+                        <ActionButton
+                          disabled={isBuilding || !synced}
+                          onClick={() => void buildThreadsForAccount(account.id)}
+                        >
+                          {isBuilding ? (
+                            <>
+                              <span className="h-2.5 w-2.5 animate-spin rounded-full border border-white/40 border-t-white/70" />
+                              Building…
+                            </>
+                          ) : threadsBuilt ? (
+                            'Threads built ✓'
+                          ) : (
+                            'Build threads'
+                          )}
+                        </ActionButton>
+                      </IntegrationRow>
+
+                      {/* 3 — Obsidian */}
+                      <IntegrationRow
+                        icon={<HiOutlineDocumentText className="h-4 w-4 text-white/40" />}
+                        name="Obsidian"
+                        status={obsidianStatus}
+                      >
+                        <ActionButton
+                          disabled={isExportingObsidian || !synced}
+                          onClick={() => void exportToObsidian(account.id)}
+                        >
+                          {isExportingObsidian ? (
+                            <>
+                              <span className="h-2.5 w-2.5 animate-spin rounded-full border border-white/40 border-t-white/70" />
+                              Exporting…
+                            </>
+                          ) : obsidianProg?.done ? (
+                            'Re-export'
+                          ) : (
+                            'Export to Obsidian'
+                          )}
+                        </ActionButton>
+                      </IntegrationRow>
+
+                      {/* 4 — Calendar */}
+                      <IntegrationRow
+                        icon={<HiOutlineCalendar className="h-4 w-4 text-white/40" />}
+                        name="Calendar"
+                        status={calendarStatus}
+                        last
+                      >
+                        <ActionButton
+                          disabled={isSyncing}
+                          onClick={() => void syncCalendar(account.id)}
+                        >
+                          {isSyncing ? (
+                            <>
+                              <span className="h-2.5 w-2.5 animate-spin rounded-full border border-white/40 border-t-white/70" />
+                              Syncing…
+                            </>
+                          ) : calendarSyncedId === account.id ? (
+                            'Synced ✓'
+                          ) : (
+                            'Sync now'
+                          )}
+                        </ActionButton>
+                      </IntegrationRow>
                     </div>
                   </motion.div>
                 )}
@@ -473,6 +502,7 @@ export function ConnectionsPanel() {
         })}
       </div>
 
+      {/* Add account */}
       {adding ? (
         <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3">
           <input
@@ -525,13 +555,71 @@ export function ConnectionsPanel() {
         >
           <HiOutlineDocumentText size={16} />
           {exportingContacts && contactsProgress
-            ? `Writing contacts... ${contactsProgress.processed}/${contactsProgress.total}`
+            ? `Writing contacts… ${contactsProgress.processed}/${contactsProgress.total}`
             : contactsProgress?.done
               ? '✓ Contacts in Obsidian'
               : 'Export contacts to Obsidian'}
         </button>
       )}
     </div>
+  )
+}
+
+/** One row in the integrations accordion. */
+function IntegrationRow({
+  icon,
+  name,
+  status,
+  last = false,
+  children,
+}: {
+  icon: React.ReactNode
+  name: string
+  status: string
+  last?: boolean
+  children: React.ReactNode
+}) {
+  return (
+    <div
+      className={`flex items-center justify-between py-2 ${last ? '' : 'border-b border-white/[0.05]'}`}
+    >
+      <div className="flex items-center gap-3">
+        {icon}
+        <div>
+          <div className="text-sm text-white/80">{name}</div>
+          <div className="text-xs text-white/40">{status}</div>
+        </div>
+      </div>
+      {children}
+    </div>
+  )
+}
+
+/** Consistent pill button for integration row actions. */
+function ActionButton({
+  children,
+  disabled = false,
+  amber = false,
+  onClick,
+}: {
+  children: React.ReactNode
+  disabled?: boolean
+  amber?: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-all disabled:opacity-40 ${
+        amber
+          ? 'border-amber-400/25 text-amber-300/80 hover:border-amber-400/40 hover:bg-amber-400/10 hover:text-amber-200'
+          : 'border-white/15 text-white/60 hover:border-white/30 hover:text-white'
+      }`}
+    >
+      {children}
+    </button>
   )
 }
 
