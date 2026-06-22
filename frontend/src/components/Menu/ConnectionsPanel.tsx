@@ -40,6 +40,7 @@ export function ConnectionsPanel() {
   const [newLabel, setNewLabel] = useState('')
   const [openAccordionId, setOpenAccordionId] = useState<number | null>(null)
   const [syncingId, setSyncingId] = useState<number | null>(null)
+  const [calendarSyncedId, setCalendarSyncedId] = useState<number | null>(null)
   const [exportingObsidianId, setExportingObsidianId] = useState<number | null>(null)
   const [obsidianProgress, setObsidianProgress] = useState<
     Record<number, { processed: number; total: number; done: boolean }>
@@ -162,6 +163,8 @@ export function ConnectionsPanel() {
     setSyncingId(accountId)
     try {
       await api.syncCalendar(accountId)
+      setCalendarSyncedId(accountId)
+      setTimeout(() => setCalendarSyncedId((prev) => (prev === accountId ? null : prev)), 2000)
       await load()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Calendar sync failed')
@@ -343,6 +346,27 @@ export function ConnectionsPanel() {
                       </button>
                     )
                   })()}
+                  <button
+                    type="button"
+                    disabled={syncingId === account.id}
+                    onClick={() => void syncCalendar(account.id)}
+                    className="flex items-center gap-1 rounded-full border border-white/15 px-3 py-1 text-xs text-white/80 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-40"
+                    title="Sync calendar events"
+                  >
+                    {syncingId === account.id ? (
+                      <>
+                        <span className="h-3 w-3 animate-spin rounded-full border border-white/40 border-t-white/80" />
+                        Syncing
+                      </>
+                    ) : calendarSyncedId === account.id ? (
+                      'Synced ✓'
+                    ) : (
+                      <>
+                        <HiOutlineCalendar size={12} />
+                        Sync calendar
+                      </>
+                    )}
+                  </button>
                   <button
                     type="button"
                     onClick={() => sweep(account.id)}
