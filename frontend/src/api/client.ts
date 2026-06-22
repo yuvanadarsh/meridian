@@ -329,7 +329,7 @@ export const api = {
     request<{ status: string; account_id: number }>(`/contacts/build/${accountId}`, {
       method: 'POST',
     }),
-  getContacts: (limit = 200) =>
+  getContacts: (limit = 500) =>
     request<{ contacts: Contact[] }>(`/contacts?limit=${limit}`),
   searchContacts: (query: string) =>
     request<{ contacts: Contact[] }>(`/contacts/search?q=${encodeURIComponent(query)}`),

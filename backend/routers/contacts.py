@@ -32,7 +32,7 @@ async def build_contact_graph(
 
 @router.get("")
 async def list_contacts(
-    limit: int = Query(200, ge=1, le=1000),
+    limit: int = Query(500, ge=1, le=1000),
     db: AsyncSession = Depends(get_db),
 ):
     """Return all contacts sorted by email volume, most active first."""
