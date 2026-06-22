@@ -425,6 +425,10 @@ export const api = {
     request<{ status: string; review: DailyReview | null }>('/review/dismiss', {
       method: 'POST',
     }),
+  reopenReview: () =>
+    request<{ status: string; review: DailyReview | null }>('/review/reopen', {
+      method: 'POST',
+    }),
 
   // Scheduled tasks
   getTasks: () => request<{ tasks: ScheduledTask[] }>('/tasks'),

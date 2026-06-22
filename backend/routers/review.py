@@ -126,6 +126,25 @@ async def approve_review(db: AsyncSession = Depends(get_db)):
     return {"status": "approved", "applied": applied, "review": await _today_review(db)}
 
 
+@router.post("/reopen")
+async def reopen_review(db: AsyncSession = Depends(get_db)):
+    """Set today's dismissed review back to pending so the user can act on it."""
+    result = await db.execute(
+        text(
+            """
+            UPDATE afternoon_reviews
+            SET status = 'pending', updated_at = NOW()
+            WHERE review_date = CURRENT_DATE
+            RETURNING id
+            """
+        )
+    )
+    if not result.first():
+        raise HTTPException(status_code=404, detail="No review for today")
+    await db.commit()
+    return {"status": "pending", "review": await _today_review(db)}
+
+
 @router.post("/dismiss")
 async def dismiss_review(db: AsyncSession = Depends(get_db)):
     """Mark today's review dismissed without applying any action."""

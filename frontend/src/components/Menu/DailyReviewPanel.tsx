@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { motion } from 'framer-motion'
-import { FiCalendar, FiCheck, FiMail, FiX } from 'react-icons/fi'
+import { AnimatePresence, motion } from 'framer-motion'
+import { FiCalendar, FiCheck, FiChevronDown, FiMail, FiX } from 'react-icons/fi'
 import { HiOutlineInbox } from 'react-icons/hi2'
 
 import { api, type DailyReview, type ReviewEmail } from '../../api/client'
@@ -15,23 +15,45 @@ function formatDate(iso: string): string {
   })
 }
 
+function formatReceived(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}
+
+function suggestedAction(email: ReviewEmail): string {
+  if (email.classification === 'trash') return 'Trash — no action needed'
+  if (email.draft_id !== null) return 'Keep — draft reply queued'
+  if (email.needs_reply) return 'Keep — reply needed'
+  if (email.calendar_suggestion?.detected) return 'Keep — schedule a meeting'
+  if (email.classification === 'archive') return 'Archive — no reply needed'
+  return 'Keep'
+}
+
 /**
  * Daily Review panel: a newspaper-style digest of the afternoon email review.
  * Emails are grouped into Action Required (need a reply / have a queued draft),
  * FYI (archived automatically), and Cleaned Up (trashed). The user approves all
  * to push triage to Gmail, or dismisses without action.
+ *
+ * Cards expand on click to show full detail. Dismissed reviews remain viewable
+ * (read-only) with a Reopen button and a fresh "Run review now" option.
  */
 export function DailyReviewPanel() {
   const [review, setReview] = useState<DailyReview | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [expandedId, setExpandedId] = useState<number | null>(null)
   const setActivePanel = useMeridianStore((state) => state.setActivePanel)
   const setMenuOpen = useMeridianStore((state) => state.setMenuOpen)
   const setChatOpen = useMeridianStore((state) => state.setChatOpen)
   const setChatPrefill = useMeridianStore((state) => state.setChatPrefill)
 
-  // Open the chat pre-filled to schedule a meeting from a suggested email.
   const addToCalendar = (email: ReviewEmail) => {
     const who = email.from || 'them'
     const about = email.subject ? ` about "${email.subject}"` : ''
@@ -59,6 +81,7 @@ export function DailyReviewPanel() {
   const runNow = async () => {
     setBusy(true)
     setError(null)
+    setExpandedId(null)
     try {
       const { review: result } = await api.triggerReview()
       setReview(result)
@@ -93,6 +116,23 @@ export function DailyReviewPanel() {
     } finally {
       setBusy(false)
     }
+  }
+
+  const reopen = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const { review: result } = await api.reopenReview()
+      setReview(result)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not reopen review')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const toggleCard = (id: number) => {
+    setExpandedId((prev) => (prev === id ? null : id))
   }
 
   const groups = useMemo(() => {
@@ -138,7 +178,8 @@ export function DailyReviewPanel() {
     )
   }
 
-  const acted = review.status !== 'pending'
+  const isPending = review.status === 'pending'
+  const isDismissed = review.status === 'dismissed'
   const draftCount = review.emails.filter((email) => email.draft_id !== null).length
 
   return (
@@ -148,6 +189,7 @@ export function DailyReviewPanel() {
       transition={{ duration: 0.2 }}
       className="flex flex-col gap-4"
     >
+      {/* Header */}
       <div className="flex items-start justify-between gap-3">
         <div>
           <h3 className="text-sm font-semibold text-white">
@@ -158,7 +200,7 @@ export function DailyReviewPanel() {
             {groups.archivedCount} archived · {groups.trashed.length} trashed
           </p>
         </div>
-        {!acted && (
+        {isPending && (
           <div className="flex shrink-0 items-center gap-2">
             <button
               type="button"
@@ -180,53 +222,96 @@ export function DailyReviewPanel() {
         )}
       </div>
 
-      {acted && (
+      {error && <p className="text-xs text-rose-300/80">{error}</p>}
+
+      {/* Status banner for approved / dismissed */}
+      {review.status === 'approved' && (
         <p className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/50">
-          {review.status === 'approved'
-            ? 'Approved — triage applied and summaries saved.'
-            : 'Dismissed — no action taken.'}
+          Approved — triage applied and summaries saved.
         </p>
       )}
 
-      {error && <p className="text-xs text-rose-300/80">{error}</p>}
+      {isDismissed && (
+        <div className="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-3 py-2">
+          <p className="text-xs text-white/50">Dismissed — no action taken.</p>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void runNow()}
+              disabled={busy}
+              className="text-xs text-white/40 hover:text-white disabled:opacity-40"
+            >
+              {busy ? 'Running…' : 'Run again'}
+            </button>
+            <button
+              type="button"
+              onClick={() => void reopen()}
+              disabled={busy}
+              className="rounded-lg bg-white/10 px-2.5 py-1 text-xs text-white/70 transition-colors hover:bg-white/20 hover:text-white disabled:opacity-40"
+            >
+              Reopen
+            </button>
+          </div>
+        </div>
+      )}
 
+      {/* Action Required section */}
       {groups.actionRequired.length > 0 && (
         <Section title="Action Required">
           {groups.actionRequired.map((email) => (
-            <ReviewCard key={email.email_id} email={email}>
-              {email.draft_id !== null && (
-                <button
-                  type="button"
-                  onClick={() => setActivePanel('drafts')}
-                  className="rounded-lg bg-white/10 px-3 py-1.5 text-xs text-white/80 transition-colors hover:bg-white/15"
-                >
-                  View draft reply
-                </button>
-              )}
-              {email.calendar_suggestion?.detected && (
-                <button
-                  type="button"
-                  onClick={() => addToCalendar(email)}
-                  className="flex items-center gap-1.5 rounded-lg bg-sky-500/20 px-3 py-1.5 text-xs text-sky-200 transition-colors hover:bg-sky-500/30"
-                >
-                  <FiCalendar size={13} /> Add to calendar
-                </button>
+            <ReviewCard
+              key={email.email_id}
+              email={email}
+              isExpanded={expandedId === email.email_id}
+              onToggle={() => toggleCard(email.email_id)}
+            >
+              {/* Action buttons only shown when review is pending */}
+              {isPending && (
+                <>
+                  {email.draft_id !== null && (
+                    <button
+                      type="button"
+                      onClick={() => setActivePanel('drafts')}
+                      className="rounded-lg bg-white/10 px-3 py-1.5 text-xs text-white/80 transition-colors hover:bg-white/15"
+                    >
+                      View draft reply
+                    </button>
+                  )}
+                  {email.calendar_suggestion?.detected && (
+                    <button
+                      type="button"
+                      onClick={() => addToCalendar(email)}
+                      className="flex items-center gap-1.5 rounded-lg bg-sky-500/20 px-3 py-1.5 text-xs text-sky-200 transition-colors hover:bg-sky-500/30"
+                    >
+                      <FiCalendar size={13} /> Add to calendar
+                    </button>
+                  )}
+                </>
               )}
             </ReviewCard>
           ))}
         </Section>
       )}
 
+      {/* FYI section */}
       {groups.fyi.length > 0 && (
         <Section title="FYI">
           {groups.fyi.map((email) => (
-            <ReviewCard key={email.email_id} email={email}>
-              <span className="text-xs text-white/30">Archived automatically.</span>
+            <ReviewCard
+              key={email.email_id}
+              email={email}
+              isExpanded={expandedId === email.email_id}
+              onToggle={() => toggleCard(email.email_id)}
+            >
+              {isPending && (
+                <span className="text-xs text-white/30">Archived automatically.</span>
+              )}
             </ReviewCard>
           ))}
         </Section>
       )}
 
+      {/* Cleaned Up section */}
       {(groups.trashed.length > 0 || groups.archivedCount > 0) && (
         <Section title="Cleaned Up">
           <p className="px-1 text-xs text-white/40">
@@ -258,26 +343,79 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 function ReviewCard({
   email,
+  isExpanded,
+  onToggle,
   children,
 }: {
   email: ReviewEmail
+  isExpanded: boolean
+  onToggle: () => void
   children?: React.ReactNode
 }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-      <div className="flex items-start gap-2">
+    <div className="overflow-hidden rounded-2xl border border-white/10 bg-white/5">
+      {/* Collapsed header — always visible, click to expand */}
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-start gap-2 px-4 py-3 text-left"
+      >
         <FiMail size={14} className="mt-0.5 shrink-0 text-white/40" />
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-white">
             {email.subject || '(no subject)'}
           </p>
           <p className="truncate text-xs text-white/40">{email.from || 'Unknown sender'}</p>
-          {email.summary && (
+          {!isExpanded && email.summary && (
             <p className="mt-1 line-clamp-2 text-xs text-white/60">{email.summary}</p>
           )}
         </div>
-      </div>
-      {children && <div className="mt-2 flex flex-wrap items-center gap-2">{children}</div>}
+        <FiChevronDown
+          size={14}
+          className={`mt-0.5 shrink-0 text-white/30 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+        />
+      </button>
+
+      {/* Expanded detail */}
+      <AnimatePresence initial={false}>
+        {isExpanded && (
+          <motion.div
+            key="detail"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2, ease: 'easeInOut' }}
+            className="overflow-hidden"
+          >
+            <div className="flex flex-col gap-2 border-t border-white/[0.06] px-4 pb-3 pt-2">
+              <div className="flex flex-col gap-0.5 text-xs text-white/40">
+                {email.from && (
+                  <p>
+                    <span className="text-white/30">From </span>
+                    {email.from}
+                  </p>
+                )}
+                {email.received_at && (
+                  <p>
+                    <span className="text-white/30">Received </span>
+                    {formatReceived(email.received_at)}
+                  </p>
+                )}
+              </div>
+              {email.summary && (
+                <p className="text-xs leading-relaxed text-white/60">{email.summary}</p>
+              )}
+              <p className="text-xs text-white/40">
+                Suggested action:{' '}
+                <span className="text-white/60">{suggestedAction(email)}</span>
+              </p>
+              {children && (
+                <div className="mt-1 flex flex-wrap items-center gap-2">{children}</div>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }
