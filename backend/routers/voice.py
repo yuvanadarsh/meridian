@@ -4,11 +4,14 @@ import logging
 import re
 
 import aiohttp
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import get_settings
+from db.database import get_db
+from services import usage_service
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -49,7 +52,7 @@ class SpeakRequest(BaseModel):
 
 
 @router.post("/speak")
-async def speak(payload: SpeakRequest) -> Response:
+async def speak(payload: SpeakRequest, db: AsyncSession = Depends(get_db)) -> Response:
     """Synthesize speech for the given text and return it as audio/mpeg."""
     if not settings.elevenlabs_api_key or not settings.elevenlabs_voice_id:
         raise HTTPException(
@@ -86,5 +89,8 @@ async def speak(payload: SpeakRequest) -> Response:
     except aiohttp.ClientError as exc:
         logger.exception("ElevenLabs request failed")
         raise HTTPException(status_code=502, detail=f"TTS request failed: {exc}") from exc
+
+    await usage_service.log_usage("elevenlabs", ELEVENLABS_MODEL, "characters", len(spoken_text), db)
+    await db.commit()
 
     return Response(content=audio, media_type="audio/mpeg")

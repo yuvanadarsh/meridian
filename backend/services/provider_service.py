@@ -19,7 +19,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import get_settings
-from services import claude_service, crypto
+from services import claude_service, crypto, usage_service
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -114,8 +114,15 @@ async def _complete(
     model = _model_for(active, task)
 
     if provider == "anthropic":
-        return await _anthropic_complete(active, model, system, messages, max_tokens)
-    return await _openai_compatible_complete(active, provider, model, system, messages, max_tokens)
+        text_out, usage = await _anthropic_complete(active, model, system, messages, max_tokens)
+    else:
+        text_out, usage = await _openai_compatible_complete(
+            active, provider, model, system, messages, max_tokens
+        )
+
+    await usage_service.log_usage(provider, model, "input_tokens", usage.input_tokens, db)
+    await usage_service.log_usage(provider, model, "output_tokens", usage.output_tokens, db)
+    return text_out, usage
 
 
 async def _anthropic_complete(
