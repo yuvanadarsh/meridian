@@ -71,7 +71,7 @@ export function TokenCounter() {
 
       {/* Hover breakdown */}
       {hovered && providers.length > 0 && (
-        <div className="absolute right-0 top-6 w-72 rounded-xl border border-white/10 bg-[#111] p-4 shadow-xl">
+        <div className="absolute right-0 top-full mt-1 w-72 rounded-xl border border-white/10 bg-[#111] p-4 shadow-xl">
           <div className="mb-3 text-xs font-medium text-white/60">Today's Usage</div>
 
           {providers.map(([provider, data]) => (
