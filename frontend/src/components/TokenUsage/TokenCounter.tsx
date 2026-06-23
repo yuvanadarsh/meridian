@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { api } from "../../api/client";
 
@@ -30,6 +30,8 @@ const USAGE_TYPE_LABELS: Record<string, string> = {
  */
 export function TokenCounter() {
   const [usage, setUsage] = useState<UsageToday | null>(null);
+  const [hovered, setHovered] = useState(false);
+  const timeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -49,14 +51,32 @@ export function TokenCounter() {
     };
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, []);
+
   if (!usage) return null;
 
   const providers = Object.entries(usage.by_provider);
 
+  const handleMouseEnter = () => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    setHovered(true);
+  };
+
+  const handleMouseLeave = () => {
+    timeoutRef.current = window.setTimeout(() => setHovered(false), 300);
+  };
+
   return (
-    <div className="group fixed right-4 top-4 z-10 select-none font-mono">
-      {/* Default display */}
-      <div className="cursor-default text-right text-xs text-white/30">
+    <div className="fixed right-4 top-4 z-10 select-none font-mono">
+      <div
+        className="cursor-default text-right text-xs text-white/30"
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+      >
         <span>Tokens: {usage.total_tokens_today.toLocaleString()}</span>
         <span className="mx-1 text-white/15">·</span>
         <span>Today: ${usage.total_cost_today.toFixed(3)}</span>
@@ -64,9 +84,12 @@ export function TokenCounter() {
         <span>Month: ${usage.total_cost_month.toFixed(2)}</span>
       </div>
 
-      {/* Hover breakdown — always in DOM, shown via CSS so no gap can break hover */}
-      {providers.length > 0 && (
-        <div className="absolute right-0 top-full mt-2 w-72 rounded-xl border border-white/10 bg-[#111] p-4 shadow-xl z-50 opacity-0 group-hover:opacity-100 transition-opacity duration-150 pointer-events-none group-hover:pointer-events-auto">
+      {hovered && providers.length > 0 && (
+        <div
+          className="absolute right-0 top-full mt-2 w-72 rounded-xl border border-white/10 bg-[#111] p-4 shadow-xl z-50"
+          onMouseEnter={handleMouseEnter}
+          onMouseLeave={handleMouseLeave}
+        >
           <div className="mb-3 text-xs font-medium text-white/60">Today's Usage</div>
 
           {providers.map(([provider, data]) => (
