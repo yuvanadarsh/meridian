@@ -67,13 +67,13 @@ export function TokenCounter() {
   };
 
   const handleMouseLeave = () => {
-    timeoutRef.current = window.setTimeout(() => setHovered(false), 300);
+    timeoutRef.current = window.setTimeout(() => setHovered(false), 0);
   };
 
   return (
     <div className="fixed right-4 top-4 z-10 select-none font-mono">
       <div
-        className="cursor-default text-right text-xs text-white/30"
+        className="cursor-default pb-2 text-right text-xs text-white/30"
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
       >
@@ -86,7 +86,7 @@ export function TokenCounter() {
 
       {hovered && providers.length > 0 && (
         <div
-          className="absolute right-0 top-full mt-2 w-72 rounded-xl border border-white/10 bg-[#111] p-4 shadow-xl z-50"
+          className="absolute right-0 top-full mt-0 w-72 rounded-xl border border-white/10 bg-[#111] p-4 shadow-xl z-50"
           onMouseEnter={handleMouseEnter}
           onMouseLeave={handleMouseLeave}
         >
