@@ -5,6 +5,7 @@ import { api } from './api/client'
 import BriefModal from './components/Brief/BriefModal'
 import ChatInput from './components/Chat/ChatInput'
 import ChatModal from './components/Chat/ChatModal'
+import { GlanceStrip } from './components/GlanceStrip/GlanceStrip'
 import HamburgerMenu from './components/Menu/HamburgerMenu'
 import Onboarding from './components/Onboarding/Onboarding'
 import Orb from './components/Orb/Orb'
@@ -40,6 +41,8 @@ function App() {
   const setTriageReviewAccountId = useMeridianStore((state) => state.setTriageReviewAccountId)
   const chatPrefill = useMeridianStore((state) => state.chatPrefill)
   const setChatPrefill = useMeridianStore((state) => state.setChatPrefill)
+  const setMenuOpen = useMeridianStore((state) => state.setMenuOpen)
+  const setActivePanel = useMeridianStore((state) => state.setActivePanel)
   const { send, sending } = useChat()
   const { recording, supported, toggleRecording } = useVoice()
 
@@ -106,6 +109,10 @@ function App() {
   }, [messages])
 
   const openChat = () => setChatOpen(true)
+  const openReview = () => {
+    setMenuOpen(true)
+    setActivePanel('review')
+  }
 
   return (
     <main className="relative min-h-screen w-full overflow-hidden bg-[#0a0a0a] bg-[radial-gradient(ellipse_at_center,_#111827_0%,_#0a0a0a_70%)] text-white">
@@ -117,6 +124,8 @@ function App() {
 
       <div className="flex min-h-screen flex-col items-center justify-center gap-6 px-4 py-16">
         <Orb state={orbState} onClick={openChat} />
+
+        <GlanceStrip onOpenBrief={() => setBriefOpen(true)} onOpenReview={openReview} />
 
         {supported && (
           <div className="-mt-2 flex flex-col items-center gap-2">

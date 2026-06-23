@@ -170,6 +170,14 @@ export interface Contact {
   topics: string[] | null
 }
 
+export interface CalendarEvent {
+  id: number
+  title: string | null
+  start_time: string | null
+  end_time: string | null
+  meet_link: string | null
+}
+
 export interface CalendarSuggestion {
   detected: boolean
   email_id: number
@@ -432,6 +440,25 @@ export const api = {
     request<{ status: string; review: DailyReview | null }>('/review/reopen', {
       method: 'POST',
     }),
+
+  // Usage tracking
+  getUsageToday: () =>
+    request<{
+      total_tokens_today: number
+      total_cost_today: number
+      total_cost_month: number
+      by_provider: Record<
+        string,
+        {
+          model: string
+          types: Record<string, { units: number; cost_usd: number }>
+          total_cost: number
+        }
+      >
+    }>('/usage/today'),
+
+  // Calendar — all accounts
+  getCalendarToday: () => request<{ events: CalendarEvent[] }>('/calendar/today'),
 
   // Scheduled tasks
   getTasks: () => request<{ tasks: ScheduledTask[] }>('/tasks'),

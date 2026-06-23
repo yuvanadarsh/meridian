@@ -34,6 +34,7 @@ from routers import (
     settings as settings_router,
     supercharge,
     tasks as tasks_router,
+    usage,
     voice,
 )
 from services import obsidian_service
@@ -199,6 +200,7 @@ app.include_router(settings_router.router)
 app.include_router(contacts.router)
 app.include_router(supercharge.router)
 app.include_router(tasks_router.router)
+app.include_router(usage.router)
 
 
 # All failures return the shape { error: string, detail?: string }.

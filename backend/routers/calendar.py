@@ -61,6 +61,21 @@ async def create_event(payload: EventCreate, db: AsyncSession = Depends(get_db))
         ) from exc
 
 
+@router.get("/today")
+async def today_all(db: AsyncSession = Depends(get_db)):
+    """Return today's events across all connected accounts, sorted by start time."""
+    accounts = await gmail_service.list_accounts(db)
+    all_events: list[dict] = []
+    for account in accounts:
+        try:
+            events = await calendar_service.get_today(account["id"], db)
+            all_events.extend(events)
+        except Exception:  # noqa: BLE001 — one bad account shouldn't block the rest
+            logger.warning("Could not fetch today's events for account %s", account["id"])
+    all_events.sort(key=lambda e: e.get("start_time") or "")
+    return {"events": all_events}
+
+
 @router.get("/today/{account_id}")
 async def today(account_id: int, db: AsyncSession = Depends(get_db)):
     """Return today's events sorted by start time."""

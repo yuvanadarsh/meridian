@@ -88,6 +88,12 @@ async def embed_texts(texts: list[str], db: AsyncSession | None = None) -> list[
     if provider == "voyage":
         client = get_client()
         result = await asyncio.to_thread(client.embed, texts, model=model)
+        token_count = getattr(result, "total_tokens", None) or sum(
+            len(t.split()) for t in texts
+        )
+        if db is not None:
+            from services import usage_service
+            await usage_service.log_usage("voyageai", model, "embed_tokens", token_count, db)
         return result.embeddings
     if provider == "openai":
         return await _embed_openai(texts, model, db)
