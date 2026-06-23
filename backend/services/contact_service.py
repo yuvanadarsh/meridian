@@ -8,6 +8,7 @@ section of the Connections panel.
 
 import json
 import logging
+import re
 from email.utils import parseaddr
 
 from sqlalchemy import text
@@ -281,18 +282,48 @@ async def search_contacts(db: AsyncSession, query: str, limit: int = 25) -> list
     return [dict(row) for row in result.mappings().all()]
 
 
+_EXCLUDE_SINGLES = {
+    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+    "January", "February", "March", "April", "June", "July", "August",
+    "September", "October", "November", "December",
+    "Gmail", "Google", "Obsidian", "Meridian", "Claude",
+    "Today", "Tomorrow", "Yesterday", "This", "That", "The", "Here",
+    "There", "Some", "Just", "Also", "With", "From", "About", "Into",
+    "What", "When", "Where", "Draft", "Email", "Send", "Write", "Reply",
+    "Can", "Could", "Would", "Should", "Have", "Will", "Help",
+}
+
+
+def _extract_name_candidates(query: str) -> list[str]:
+    """Extract likely person name tokens from a chat query.
+
+    Returns full "First Last" names and single capitalized words (min 3 chars),
+    filtering out common words, days, months, and service names. This keeps
+    false positives from words like "Draft" or "Monday" out of contact lookups.
+    """
+    full_names = re.findall(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b", query)
+    single_names = re.findall(r"\b([A-Z][a-z]{2,})\b", query)
+    seen = set(full_names)
+    candidates = list(full_names)
+    for name in single_names:
+        if name not in seen and name not in _EXCLUDE_SINGLES:
+            candidates.append(name)
+            seen.add(name)
+    return candidates
+
+
 async def get_contact_context(query: str, db: AsyncSession) -> str:
     """If the chat query mentions a known contact, return a one-line summary block.
 
-    Matches the query against contact names/emails (simple ILIKE on query terms).
-    Returns an empty string when nothing matches — never breaks chat.
+    Extracts capitalized name candidates from the query and searches contacts by
+    partial ILIKE match. Returns an empty string when nothing matches.
     """
-    terms = [t for t in query.replace(",", " ").split() if len(t) > 2]
-    if not terms:
+    candidates = _extract_name_candidates(query)
+    if not candidates:
         return ""
 
     matches: dict[str, dict] = {}
-    for term in terms[:6]:
+    for term in candidates[:6]:
         rows = await db.execute(
             text(
                 """

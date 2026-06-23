@@ -132,6 +132,15 @@ calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
   overlapping events first and asks you to confirm before scheduling over them
 - **Event suggestions from email** — emails that read like a meeting proposal get
   an "Add to calendar" button in the review panel that opens the chat pre-filled
+- **Single-name contact lookup** — chat resolves "draft an email to Kalpana" by
+  extracting capitalized name candidates and doing a partial `ILIKE` match against
+  `contacts.display_name`, so a first name alone reliably finds the right contact
+- **Bug fixes:**
+  - Contacts panel now loads up to 500 contacts (was 200)
+  - Calendar event times are converted to the user's configured timezone before
+    being injected into Claude's context (were shown as raw UTC)
+  - Wikilink extraction filters stopwords and short tokens so vault graph edges
+    stay meaningful
 
 ---
 
@@ -179,6 +188,8 @@ calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
    psql -U your_user -d meridian -f backend/db/migrations/013_ai_providers.sql
    psql -U your_user -d meridian -f backend/db/migrations/014_supercharge.sql
    psql -U your_user -d meridian -f backend/db/migrations/015_triage_mode.sql
+   psql -U your_user -d meridian -f backend/db/migrations/016_scheduled_tasks.sql
+   psql -U your_user -d meridian -f backend/db/migrations/017_afternoon_reviews.sql
    ```
 
 3. (Optional) Point Meridian at your Obsidian vault for the memory layer by
