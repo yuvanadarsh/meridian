@@ -30,7 +30,6 @@ const USAGE_TYPE_LABELS: Record<string, string> = {
  */
 export function TokenCounter() {
   const [usage, setUsage] = useState<UsageToday | null>(null)
-  const [hovered, setHovered] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -55,11 +54,7 @@ export function TokenCounter() {
   const providers = Object.entries(usage.by_provider)
 
   return (
-    <div
-      className="fixed right-4 top-4 z-10 select-none font-mono"
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
+    <div className="group fixed right-4 top-4 z-10 select-none font-mono">
       {/* Default display */}
       <div className="cursor-default text-right text-xs text-white/30">
         <span>Tokens: {usage.total_tokens_today.toLocaleString()}</span>
@@ -69,9 +64,9 @@ export function TokenCounter() {
         <span>Month: ${usage.total_cost_month.toFixed(2)}</span>
       </div>
 
-      {/* Hover breakdown */}
-      {hovered && providers.length > 0 && (
-        <div className="absolute right-0 top-full mt-1 w-72 rounded-xl border border-white/10 bg-[#111] p-4 shadow-xl">
+      {/* Hover breakdown — always in DOM, shown via CSS so no gap can break hover */}
+      {providers.length > 0 && (
+        <div className="absolute right-0 top-full mt-2 w-72 rounded-xl border border-white/10 bg-[#111] p-4 shadow-xl transition-opacity duration-150 invisible opacity-0 group-hover:visible group-hover:opacity-100">
           <div className="mb-3 text-xs font-medium text-white/60">Today's Usage</div>
 
           {providers.map(([provider, data]) => (
