@@ -1,27 +1,27 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState } from "react";
 
-import { api } from '../../api/client'
+import { api } from "../../api/client";
 
 interface UsageToday {
-  total_tokens_today: number
-  total_cost_today: number
-  total_cost_month: number
+  total_tokens_today: number;
+  total_cost_today: number;
+  total_cost_month: number;
   by_provider: Record<
     string,
     {
-      model: string
-      types: Record<string, { units: number; cost_usd: number }>
-      total_cost: number
+      model: string;
+      types: Record<string, { units: number; cost_usd: number }>;
+      total_cost: number;
     }
-  >
+  >;
 }
 
 const USAGE_TYPE_LABELS: Record<string, string> = {
-  input_tokens: 'Input',
-  output_tokens: 'Output',
-  characters: 'Characters',
-  embed_tokens: 'Embedded',
-}
+  input_tokens: "Input",
+  output_tokens: "Output",
+  characters: "Characters",
+  embed_tokens: "Embedded",
+};
 
 /**
  * Top-right usage display. Default view shows tokens + daily + monthly cost.
@@ -29,29 +29,29 @@ const USAGE_TYPE_LABELS: Record<string, string> = {
  * Refreshes every 30s from /usage/today; falls back gracefully when the API is down.
  */
 export function TokenCounter() {
-  const [usage, setUsage] = useState<UsageToday | null>(null)
+  const [usage, setUsage] = useState<UsageToday | null>(null);
 
   useEffect(() => {
-    let active = true
+    let active = true;
     const load = async () => {
       try {
-        const data = await api.getUsageToday()
-        if (active) setUsage(data)
+        const data = await api.getUsageToday();
+        if (active) setUsage(data);
       } catch {
         // Backend may be offline — leave the last known values in place.
       }
-    }
-    void load()
-    const interval = window.setInterval(load, 30_000)
+    };
+    void load();
+    const interval = window.setInterval(load, 30_000);
     return () => {
-      active = false
-      window.clearInterval(interval)
-    }
-  }, [])
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, []);
 
-  if (!usage) return null
+  if (!usage) return null;
 
-  const providers = Object.entries(usage.by_provider)
+  const providers = Object.entries(usage.by_provider);
 
   return (
     <div className="group fixed right-4 top-4 z-10 select-none font-mono">
@@ -66,16 +66,14 @@ export function TokenCounter() {
 
       {/* Hover breakdown — always in DOM, shown via CSS so no gap can break hover */}
       {providers.length > 0 && (
-        <div className="absolute right-0 top-full mt-2 w-72 rounded-xl border border-white/10 bg-[#111] p-4 shadow-xl transition-opacity duration-150 invisible opacity-0 group-hover:visible group-hover:opacity-100">
+        <div className="absolute right-0 top-full mt-2 w-72 rounded-xl border border-white/10 bg-[#111] p-4 shadow-xl z-50 opacity-0 group-hover:opacity-100 transition-opacity duration-150 pointer-events-none group-hover:pointer-events-auto">
           <div className="mb-3 text-xs font-medium text-white/60">Today's Usage</div>
 
           {providers.map(([provider, data]) => (
             <div key={provider} className="mb-3">
               <div className="mb-1 text-xs capitalize text-white/50">
                 {provider}
-                {data.model ? (
-                  <span className="ml-1 text-white/30">({data.model})</span>
-                ) : null}
+                {data.model ? <span className="ml-1 text-white/30">({data.model})</span> : null}
               </div>
               {Object.entries(data.types).map(([type, info]) => (
                 <div key={type} className="flex justify-between pl-2 text-xs text-white/40">
@@ -101,7 +99,7 @@ export function TokenCounter() {
         </div>
       )}
     </div>
-  )
+  );
 }
 
-export default TokenCounter
+export default TokenCounter;
