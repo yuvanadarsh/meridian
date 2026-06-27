@@ -37,6 +37,7 @@ export interface GmailAccount {
   label: string | null
   last_synced_at: string | null
   sweep_status: string // idle | running | classifying | triage_complete | completed | error
+  auth_status: 'ok' | 'expired' // 'expired' when the stored token has been revoked
 }
 
 export interface ChatResponse {
@@ -244,6 +245,10 @@ export const api = {
   getAccounts: () => request<GmailAccount[]>('/gmail/accounts'),
   getAuthUrl: (label: string) =>
     request<{ url: string }>(`/gmail/auth?label=${encodeURIComponent(label)}`),
+  reauthAccount: (accountId: number) => {
+    // Navigate directly — the endpoint returns a redirect to Google.
+    window.location.assign(`${API_URL}/gmail/reauth/${accountId}`)
+  },
   updateAccount: (accountId: number, label: string) =>
     request<GmailAccount>(`/gmail/accounts/${accountId}`, {
       method: 'PATCH',

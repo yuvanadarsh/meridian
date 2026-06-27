@@ -3,9 +3,11 @@
 import asyncio
 import json
 import logging
+import secrets
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse, RedirectResponse
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import get_settings
@@ -22,42 +24,143 @@ router = APIRouter(prefix="/gmail", tags=["gmail"])
 @router.get("/auth")
 async def gmail_auth(
     label: str = Query(..., description="Account role: personal, school, work, professional"),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Return the Google OAuth consent URL for connecting an account."""
+    """Return the Google OAuth consent URL for connecting an account.
+
+    Generates a PKCE code verifier and persists it in ``oauth_state`` keyed
+    by a random state token. The callback retrieves the verifier from the
+    database — it never lives only in memory.
+    """
     if not settings.google_client_id or not settings.google_client_secret:
         raise HTTPException(
             status_code=500, detail="Google OAuth credentials are not configured"
         )
+    state = secrets.token_urlsafe(16)
+    code_verifier, code_challenge = gmail_service.generate_pkce_pair()
     try:
-        url = gmail_service.build_auth_url(label)
+        await db.execute(
+            text(
+                "INSERT INTO oauth_state (state, code_verifier, label) "
+                "VALUES (:state, :verifier, :label)"
+            ),
+            {"state": state, "verifier": code_verifier, "label": label},
+        )
+        await db.commit()
+        url = gmail_service.build_auth_url(label, state, code_challenge)
     except Exception as exc:  # noqa: BLE001
         logger.exception("Failed to build OAuth URL")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return {"url": url}
 
 
+@router.get("/reauth/{account_id}")
+async def reauth_account(account_id: int, db: AsyncSession = Depends(get_db)):
+    """Start a re-authentication flow for an existing account.
+
+    Preserves all swept emails and account data — only the OAuth token is
+    refreshed. On callback the existing ``gmail_accounts`` row is updated
+    (not replaced), and ``auth_status`` is reset to ``'ok'``.
+    """
+    if not settings.google_client_id or not settings.google_client_secret:
+        raise HTTPException(
+            status_code=500, detail="Google OAuth credentials are not configured"
+        )
+    result = await db.execute(
+        text("SELECT id, email, label FROM gmail_accounts WHERE id = :id"),
+        {"id": account_id},
+    )
+    account = result.mappings().first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    state = secrets.token_urlsafe(16)
+    code_verifier, code_challenge = gmail_service.generate_pkce_pair()
+    await db.execute(
+        text(
+            "INSERT INTO oauth_state (state, code_verifier, label, account_id) "
+            "VALUES (:state, :verifier, :label, :account_id)"
+        ),
+        {
+            "state": state,
+            "verifier": code_verifier,
+            "label": account["label"],
+            "account_id": account_id,
+        },
+    )
+    await db.commit()
+    url = gmail_service.build_auth_url(account["label"] or "", state, code_challenge)
+    return RedirectResponse(url=url)
+
+
 @router.get("/callback")
 async def gmail_callback(
     code: str = Query(...),
-    state: str = Query("personal", description="Account label, passed through OAuth state"),
+    state: str = Query(...),
     db: AsyncSession = Depends(get_db),
 ):
-    """Handle the OAuth redirect: exchange the code, store the token, return to UI."""
+    """Handle the OAuth redirect: exchange the code, store the token, return to UI.
+
+    Retrieves the PKCE code verifier from ``oauth_state`` and deletes the row
+    immediately after use. If the state carries an ``account_id`` this is a
+    re-auth: the existing account's token is updated without touching any data.
+    """
+    # Retrieve and immediately consume the state row.
+    result = await db.execute(
+        text(
+            "SELECT code_verifier, label, account_id "
+            "FROM oauth_state WHERE state = :state"
+        ),
+        {"state": state},
+    )
+    row = result.mappings().first()
+    if not row:
+        raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
+
+    code_verifier = row["code_verifier"]
+    label = row["label"]
+    reauth_account_id = row["account_id"]
+
+    await db.execute(
+        text("DELETE FROM oauth_state WHERE state = :state"), {"state": state}
+    )
+    await db.commit()
+
     try:
-        # The Google client calls are blocking — keep them off the event loop.
-        creds = await asyncio.to_thread(gmail_service.exchange_code, code)
+        creds = await asyncio.to_thread(gmail_service.exchange_code, code, code_verifier)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("OAuth code exchange failed")
+        raise HTTPException(status_code=400, detail=f"OAuth callback failed: {exc}") from exc
+
+    if reauth_account_id is not None:
+        # Re-auth: update the token on the existing account row.
+        token_json = json.dumps(gmail_service.credentials_to_dict(creds))
+        await db.execute(
+            text(
+                "UPDATE gmail_accounts "
+                "SET oauth_token = CAST(:token AS jsonb), auth_status = 'ok' "
+                "WHERE id = :id"
+            ),
+            {"token": token_json, "id": reauth_account_id},
+        )
+        await db.commit()
+        logger.info("Re-authenticated account id=%s", reauth_account_id)
+        return RedirectResponse(url=f"{settings.frontend_url}/?reauthed=true")
+
+    # New account: look up the email address and upsert.
+    try:
         email = await asyncio.to_thread(gmail_service.get_account_email, creds)
         await gmail_service.upsert_account(
             db,
             email=email,
-            label=state,
+            label=label or "personal",
             token=gmail_service.credentials_to_dict(creds),
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("OAuth callback failed")
         raise HTTPException(status_code=400, detail=f"OAuth callback failed: {exc}") from exc
 
-    logger.info("Connected account %s as '%s'", email, state)
+    logger.info("Connected account %s as '%s'", email, label)
     return RedirectResponse(url=f"{settings.frontend_url}/?connected={email}")
 
 
