@@ -179,6 +179,50 @@ export interface CalendarEvent {
   meet_link: string | null
 }
 
+export interface PersistentChatSummary {
+  id: string
+  title: string | null
+  auto_titled: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface PersistentChatMessage {
+  role: 'user' | 'assistant'
+  content: string
+  created_at?: string | null
+}
+
+export interface PersistentChat extends PersistentChatSummary {
+  obsidian_note_path: string | null
+  messages: PersistentChatMessage[]
+}
+
+export interface UsageHistoryPoint {
+  label: string
+  anthropic_input: number
+  anthropic_output: number
+  anthropic_cost: number
+  voyageai_tokens: number
+  voyageai_cost: number
+  elevenlabs_chars: number
+  elevenlabs_cost: number
+  total_cost: number
+}
+
+export interface UsageHistory {
+  timeframe: string
+  data: UsageHistoryPoint[]
+  totals: {
+    total_cost: number
+    anthropic_cost: number
+    voyageai_cost: number
+    elevenlabs_cost: number
+  }
+}
+
+export type UsageTimeframe = 'daily' | 'weekly' | 'monthly' | 'yearly'
+
 export interface CalendarSuggestion {
   detected: boolean
   email_id: number
@@ -465,6 +509,36 @@ export const api = {
 
   // Calendar — all accounts
   getCalendarToday: () => request<{ events: CalendarEvent[] }>('/calendar/today'),
+  getCalendarRange: (start: string, end: string) =>
+    request<{ events: CalendarEvent[] }>(
+      `/calendar/range?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`,
+    ),
+
+  // Usage history (analytics charts)
+  getUsageHistory: (timeframe: UsageTimeframe) =>
+    request<UsageHistory>(`/usage/history?timeframe=${timeframe}`),
+
+  // Persistent chats
+  createPersistentChat: () =>
+    request<PersistentChatSummary>('/persistent-chats', { method: 'POST' }),
+  listPersistentChats: () =>
+    request<{ chats: PersistentChatSummary[] }>('/persistent-chats'),
+  getPersistentChat: (id: string) =>
+    request<PersistentChat>(`/persistent-chats/${id}`),
+  deletePersistentChat: (id: string) =>
+    request<{ deleted: boolean; id: string }>(`/persistent-chats/${id}`, {
+      method: 'DELETE',
+    }),
+  renamePersistentChat: (id: string, title: string) =>
+    request<{ id: string; title: string }>(`/persistent-chats/${id}/title`, {
+      method: 'PATCH',
+      body: JSON.stringify({ title }),
+    }),
+  sendPersistentChatMessage: (id: string, content: string) =>
+    request<{ content: string; title: string | null }>(
+      `/persistent-chats/${id}/messages`,
+      { method: 'POST', body: JSON.stringify({ content }) },
+    ),
 
   // Scheduled tasks
   getTasks: () => request<{ tasks: ScheduledTask[] }>('/tasks'),
