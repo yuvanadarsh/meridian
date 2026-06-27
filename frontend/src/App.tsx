@@ -10,6 +10,7 @@ import { CalendarPage } from './pages/CalendarPage'
 import { ChatDetailPage } from './pages/ChatDetailPage'
 import { ChatPage } from './pages/ChatPage'
 import { ConnectionsPage } from './pages/ConnectionsPage'
+import { ContactsPage } from './pages/ContactsPage'
 import { DraftsPage } from './pages/DraftsPage'
 import { HomePage } from './pages/HomePage'
 import { ReviewPage } from './pages/ReviewPage'
@@ -105,6 +106,7 @@ function App() {
           <Route path="/drafts" element={<DraftsPage />} />
           <Route path="/review" element={<ReviewPage />} />
           <Route path="/brief" element={<BriefPage />} />
+          <Route path="/contacts" element={<ContactsPage />} />
           <Route path="/calendar" element={<CalendarPage />} />
           <Route path="/connections" element={<ConnectionsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
