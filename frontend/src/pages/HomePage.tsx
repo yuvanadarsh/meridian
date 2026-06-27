@@ -27,15 +27,9 @@ export function HomePage() {
 
   return (
     <div className="relative flex h-full flex-col items-center justify-center gap-6 px-4">
-      {/* Orb — clicking opens the daily chat modal. */}
-      <button
-        type="button"
-        aria-label="Open chat"
-        onClick={() => setChatOpen(true)}
-        className="cursor-pointer"
-      >
-        <Orb state={orbState} onClick={() => setChatOpen(true)} />
-      </button>
+      {/* Orb — clicking opens the daily chat modal (Orb renders its own
+          role="button" target, so it isn't wrapped in another button). */}
+      <Orb state={orbState} onClick={() => setChatOpen(true)} />
 
       {/* Subtle hints: push-to-talk (when supported) and click-to-chat. */}
       <div className="-mt-2 flex items-center gap-3 text-xs text-white/20">

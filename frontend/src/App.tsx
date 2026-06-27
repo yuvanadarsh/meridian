@@ -1,37 +1,29 @@
-import { useEffect, useMemo } from 'react'
-import { BsMicFill, BsMicMuteFill } from 'react-icons/bs'
+import { useEffect } from 'react'
+import { Route, Routes, useNavigate } from 'react-router-dom'
 
 import { api } from './api/client'
-import BriefModal from './components/Brief/BriefModal'
-import ChatInput from './components/Chat/ChatInput'
-import ChatModal from './components/Chat/ChatModal'
-import { GlanceStrip } from './components/GlanceStrip/GlanceStrip'
-import HamburgerMenu from './components/Menu/HamburgerMenu'
 import Onboarding from './components/Onboarding/Onboarding'
-import Orb from './components/Orb/Orb'
-import TokenCounter from './components/TokenUsage/TokenCounter'
-import { useChat } from './hooks/useChat'
-import { useVoice } from './hooks/useVoice'
+import { Sidebar } from './components/Sidebar/Sidebar'
+import { AnalyticsPage } from './pages/AnalyticsPage'
+import { BriefPage } from './pages/BriefPage'
+import { CalendarPage } from './pages/CalendarPage'
+import { ChatDetailPage } from './pages/ChatDetailPage'
+import { ChatPage } from './pages/ChatPage'
+import { ConnectionsPage } from './pages/ConnectionsPage'
+import { DraftsPage } from './pages/DraftsPage'
+import { HomePage } from './pages/HomePage'
+import { ReviewPage } from './pages/ReviewPage'
+import { SettingsPage } from './pages/SettingsPage'
 import { useMeridianStore } from './store/meridianStore'
 
-/** Strip common markdown markers so the one-line subtitle reads cleanly. */
-function plainPreview(text: string): string {
-  return text.replace(/[*_`#>~]/g, '').replace(/\s+/g, ' ').trim()
-}
-
 /**
- * Meridian's main screen: the orb at the center with the wordmark, token
- * counter, and menu around the edges. Clicking the orb (or the bar beneath it)
- * opens the chat modal; the last reply shows as a one-line subtitle when it's
- * closed.
+ * App shell: the persistent sidebar on the left and the routed page content on
+ * the right. Cross-route concerns live here — OAuth redirect handling, the
+ * onboarding overlay, and one-time conversation history hydration — so they
+ * survive navigation between pages.
  */
 function App() {
-  const orbState = useMeridianStore((state) => state.orbState)
-  const messages = useMeridianStore((state) => state.messages)
-  const chatOpen = useMeridianStore((state) => state.chatOpen)
-  const setChatOpen = useMeridianStore((state) => state.setChatOpen)
-  const briefOpen = useMeridianStore((state) => state.briefOpen)
-  const setBriefOpen = useMeridianStore((state) => state.setBriefOpen)
+  const navigate = useNavigate()
   const setMessages = useMeridianStore((state) => state.setMessages)
   const justConnectedEmail = useMeridianStore((state) => state.justConnectedEmail)
   const setJustConnectedEmail = useMeridianStore((state) => state.setJustConnectedEmail)
@@ -39,12 +31,6 @@ function App() {
   const setOnboardingAccountId = useMeridianStore((state) => state.setOnboardingAccountId)
   const triageReviewAccountId = useMeridianStore((state) => state.triageReviewAccountId)
   const setTriageReviewAccountId = useMeridianStore((state) => state.setTriageReviewAccountId)
-  const chatPrefill = useMeridianStore((state) => state.chatPrefill)
-  const setChatPrefill = useMeridianStore((state) => state.setChatPrefill)
-  const setMenuOpen = useMeridianStore((state) => state.setMenuOpen)
-  const setActivePanel = useMeridianStore((state) => state.setActivePanel)
-  const { send, sending } = useChat()
-  const { recording, supported, toggleRecording } = useVoice()
 
   // After Google OAuth, the backend redirects to /?connected=<email>. Capture
   // the email (handed off to the onboarding flow) and strip the query param so
@@ -57,13 +43,12 @@ function App() {
       setJustConnectedEmail(connected)
       window.history.replaceState({}, '', window.location.pathname)
     } else if (reauthed) {
-      // Re-auth succeeded — open Connections panel so the user can see the
-      // updated status without having to navigate there manually.
-      setMenuOpen(true)
-      setActivePanel('connections')
+      // Re-auth succeeded — send the user to Connections so they see the updated
+      // status without having to navigate there manually.
       window.history.replaceState({}, '', window.location.pathname)
+      navigate('/connections')
     }
-  }, [setJustConnectedEmail, setMenuOpen, setActivePanel])
+  }, [setJustConnectedEmail, navigate])
 
   // Resolve the just-connected email to its account id, then drop into the
   // onboarding flow (sweep → triage → vectorize) for that account.
@@ -108,73 +93,23 @@ function App() {
     }
   }, [setMessages])
 
-  const lastAssistant = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'assistant') return plainPreview(messages[i].content)
-    }
-    return ''
-  }, [messages])
-
-  const openChat = () => setChatOpen(true)
-  const openReview = () => {
-    setMenuOpen(true)
-    setActivePanel('review')
-  }
-
   return (
-    <main className="relative min-h-screen w-full overflow-hidden bg-[#0a0a0a] bg-[radial-gradient(ellipse_at_center,_#111827_0%,_#0a0a0a_70%)] text-white">
-      <span className="absolute left-6 top-5 z-10 text-xl font-semibold tracking-tight text-white">
-        Meridian
-      </span>
-
-      <TokenCounter />
-
-      <div className="flex min-h-screen flex-col items-center justify-center gap-6 px-4 py-16">
-        <Orb state={orbState} onClick={openChat} />
-
-        <GlanceStrip onOpenBrief={() => setBriefOpen(true)} onOpenReview={openReview} />
-
-        {supported && (
-          <div className="-mt-2 flex flex-col items-center gap-2">
-            <button
-              type="button"
-              onClick={toggleRecording}
-              aria-label={recording ? 'Stop recording' : 'Start recording'}
-              className={`flex h-10 w-10 items-center justify-center rounded-full border border-white/10 backdrop-blur transition-colors ${
-                recording ? 'bg-white/15 text-white' : 'bg-white/5 text-white/30 hover:text-white/60'
-              }`}
-            >
-              {recording ? <BsMicFill size={18} /> : <BsMicMuteFill size={18} />}
-            </button>
-            <span className="text-[11px] text-white/25">Hold space to talk</span>
-          </div>
-        )}
-
-        {!chatOpen && lastAssistant && (
-          <p className="w-[600px] max-w-[90vw] truncate px-4 text-center text-sm text-white/40">
-            {lastAssistant}
-          </p>
-        )}
-
-        <ChatInput onOpen={openChat} />
-      </div>
-
-      <ChatModal
-        open={chatOpen}
-        onClose={() => setChatOpen(false)}
-        messages={messages}
-        onSend={(text) => void send(text)}
-        sending={sending}
-        voiceSupported={supported}
-        recording={recording}
-        onToggleMic={toggleRecording}
-        prefill={chatPrefill}
-        onPrefillConsumed={() => setChatPrefill(null)}
-      />
-
-      <HamburgerMenu />
-
-      <BriefModal open={briefOpen} onClose={() => setBriefOpen(false)} />
+    <div className="flex h-screen overflow-hidden bg-[#080808] text-white">
+      <Sidebar />
+      <main className="ml-[220px] flex-1 overflow-auto">
+        <Routes>
+          <Route path="/" element={<HomePage />} />
+          <Route path="/analytics" element={<AnalyticsPage />} />
+          <Route path="/chat" element={<ChatPage />} />
+          <Route path="/chat/:id" element={<ChatDetailPage />} />
+          <Route path="/drafts" element={<DraftsPage />} />
+          <Route path="/review" element={<ReviewPage />} />
+          <Route path="/brief" element={<BriefPage />} />
+          <Route path="/calendar" element={<CalendarPage />} />
+          <Route path="/connections" element={<ConnectionsPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+        </Routes>
+      </main>
 
       {(onboardingAccountId !== null || triageReviewAccountId !== null) && (
         <Onboarding
@@ -186,7 +121,7 @@ function App() {
           }}
         />
       )}
-    </main>
+    </div>
   )
 }
 
