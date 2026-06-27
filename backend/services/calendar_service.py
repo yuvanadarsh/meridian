@@ -267,6 +267,25 @@ async def check_conflicts(
     return result.fetchall()
 
 
+async def get_range(
+    account_id: int, start: datetime, end: datetime, db: AsyncSession
+) -> list[dict]:
+    """Return events for an account whose start falls in [start, end) (UTC-naive)."""
+    result = await db.execute(
+        text(
+            f"""
+            SELECT {_EVENT_COLUMNS}
+            FROM calendar_events
+            WHERE account_id = :account_id
+              AND start_time >= :start AND start_time < :end
+            ORDER BY start_time
+            """
+        ),
+        {"account_id": account_id, "start": start, "end": end},
+    )
+    return [dict(row) for row in result.mappings().all()]
+
+
 async def get_upcoming(account_id: int, db: AsyncSession, days: int = 7) -> list[dict]:
     """Return events from now through the next ``days`` days, sorted by start time."""
     now = datetime.utcnow()

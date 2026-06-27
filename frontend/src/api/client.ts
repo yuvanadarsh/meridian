@@ -177,6 +177,8 @@ export interface CalendarEvent {
   start_time: string | null
   end_time: string | null
   meet_link: string | null
+  // Local YYYY-MM-DD bucket key, set by GET /calendar/range for the week view.
+  day?: string | null
 }
 
 export interface PersistentChatSummary {
