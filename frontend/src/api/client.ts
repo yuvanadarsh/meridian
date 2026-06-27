@@ -309,7 +309,7 @@ export const api = {
     }),
   getMessages: (limit = 50) =>
     request<StoredMessage[]>(`/chat/messages?limit=${limit}`),
-  /** @deprecated Use getUsageToday() instead. TokenCounter no longer calls this. */
+  /** @deprecated Use getUsageToday() instead. */
   getTokensToday: () => request<TokensToday>('/chat/tokens/today'),
 
   // Onboarding — sweep

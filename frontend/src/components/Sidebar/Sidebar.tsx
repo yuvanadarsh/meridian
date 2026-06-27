@@ -10,6 +10,7 @@ import {
   HiOutlineInboxArrowDown,
   HiOutlineLink,
   HiOutlineNewspaper,
+  HiOutlineUsers,
 } from 'react-icons/hi2'
 import { NavLink } from 'react-router-dom'
 
@@ -31,6 +32,7 @@ const NAV_SECTIONS: NavItem[][] = [
     { path: '/drafts', label: 'Drafts', icon: HiOutlineDocumentText },
     { path: '/review', label: 'Review', icon: HiOutlineInboxArrowDown },
     { path: '/brief', label: 'Brief', icon: HiOutlineNewspaper },
+    { path: '/contacts', label: 'Contacts', icon: HiOutlineUsers },
     { path: '/calendar', label: 'Calendar', icon: HiOutlineCalendarDays },
   ],
 ]
