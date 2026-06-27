@@ -9,6 +9,7 @@ for ElevenLabs. Unknown models fall back to the provider's 'default' row.
 """
 
 import logging
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import text
@@ -168,3 +169,138 @@ async def get_usage_today(db: AsyncSession) -> dict:
         "total_cost_month": monthly_cost,
         "by_provider": by_provider,
     }
+
+
+def _history_buckets(timeframe: str) -> tuple[list[dict], datetime]:
+    """Build the ordered, fixed list of time buckets for a usage-history chart.
+
+    Each bucket is ``{"start", "end", "label"}`` with a half-open ``[start, end)``
+    window. Returns the buckets plus the earliest start (the overall query range).
+    Empty buckets are kept so the chart always shows the full timeframe.
+    """
+    now = datetime.now()
+    buckets: list[dict] = []
+
+    if timeframe == "daily":
+        # Last 24 hours in six 4-hour blocks, aligned to 4-hour boundaries.
+        block_start = now.replace(minute=0, second=0, microsecond=0)
+        block_start = block_start.replace(hour=(block_start.hour // 4) * 4)
+        for i in range(5, -1, -1):
+            start = block_start - timedelta(hours=4 * i)
+            hour = start.hour % 12 or 12
+            meridiem = "am" if start.hour < 12 else "pm"
+            buckets.append(
+                {"start": start, "end": start + timedelta(hours=4), "label": f"{hour}{meridiem}"}
+            )
+    elif timeframe == "monthly":
+        # Last 4 weeks; Week 1 is the oldest, Week 4 the most recent.
+        today = datetime.combine(date.today(), datetime.min.time())
+        for i in range(4):
+            start = today - timedelta(days=7 * (3 - i) + 6)
+            buckets.append(
+                {"start": start, "end": start + timedelta(days=7), "label": f"Week {i + 1}"}
+            )
+    elif timeframe == "yearly":
+        # Last 12 months, oldest first, labelled by month abbreviation.
+        first_of_month = datetime.combine(date.today().replace(day=1), datetime.min.time())
+        months: list[datetime] = []
+        cursor = first_of_month
+        for _ in range(12):
+            months.append(cursor)
+            # Step back one month.
+            year, month = cursor.year, cursor.month
+            cursor = cursor.replace(
+                year=year - 1 if month == 1 else year,
+                month=12 if month == 1 else month - 1,
+            )
+        for start in reversed(months):
+            year, month = start.year, start.month
+            end = start.replace(
+                year=year + 1 if month == 12 else year,
+                month=1 if month == 12 else month + 1,
+            )
+            buckets.append({"start": start, "end": end, "label": start.strftime("%b")})
+    else:
+        # weekly (default): last 7 days, oldest first.
+        today = datetime.combine(date.today(), datetime.min.time())
+        for i in range(6, -1, -1):
+            start = today - timedelta(days=i)
+            buckets.append(
+                {"start": start, "end": start + timedelta(days=1), "label": start.strftime("%a %b %-d")}
+            )
+
+    return buckets, buckets[0]["start"]
+
+
+# Maps a (provider, usage_type) pair to the output field names for a data point.
+_HISTORY_FIELDS = {
+    ("anthropic", "input_tokens"): ("anthropic_input", "anthropic_cost"),
+    ("anthropic", "output_tokens"): ("anthropic_output", "anthropic_cost"),
+    ("voyageai", "embed_tokens"): ("voyageai_tokens", "voyageai_cost"),
+    ("elevenlabs", "characters"): ("elevenlabs_chars", "elevenlabs_cost"),
+}
+
+
+async def get_usage_history(db: AsyncSession, timeframe: str = "weekly") -> dict:
+    """Return usage grouped into fixed time buckets for the analytics charts."""
+    buckets, range_start = _history_buckets(timeframe)
+
+    result = await db.execute(
+        text(
+            """
+            SELECT provider, usage_type, units, cost_usd, created_at
+            FROM usage_log
+            WHERE created_at >= :range_start
+            """
+        ),
+        {"range_start": range_start},
+    )
+    rows = result.mappings().all()
+
+    # Seed every bucket with zeroed fields so empty periods still render.
+    data: list[dict] = []
+    for bucket in buckets:
+        data.append(
+            {
+                "label": bucket["label"],
+                "anthropic_input": 0,
+                "anthropic_output": 0,
+                "anthropic_cost": 0.0,
+                "voyageai_tokens": 0,
+                "voyageai_cost": 0.0,
+                "elevenlabs_chars": 0,
+                "elevenlabs_cost": 0.0,
+                "total_cost": 0.0,
+            }
+        )
+
+    totals = {
+        "total_cost": 0.0,
+        "anthropic_cost": 0.0,
+        "voyageai_cost": 0.0,
+        "elevenlabs_cost": 0.0,
+    }
+
+    for row in rows:
+        created = row["created_at"]
+        # Find the bucket this row falls into.
+        idx = next(
+            (i for i, b in enumerate(buckets) if b["start"] <= created < b["end"]),
+            None,
+        )
+        if idx is None:
+            continue
+        point = data[idx]
+        units = int(row["units"] or 0)
+        cost = float(row["cost_usd"] or 0)
+        fields = _HISTORY_FIELDS.get((row["provider"], row["usage_type"]))
+        if fields:
+            unit_field, cost_field = fields
+            point[unit_field] += units
+            point[cost_field] = round(point[cost_field] + cost, 6)
+            if cost_field in totals:
+                totals[cost_field] = round(totals[cost_field] + cost, 6)
+        point["total_cost"] = round(point["total_cost"] + cost, 6)
+        totals["total_cost"] = round(totals["total_cost"] + cost, 6)
+
+    return {"timeframe": timeframe, "data": data, "totals": totals}
