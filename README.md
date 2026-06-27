@@ -165,14 +165,20 @@ calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
 
 2. Create the local database and schema:
 
+   **Fresh install** — run `init.sql` only. It contains the complete schema
+   through all migrations:
+
    ```bash
    psql -U your_user -c "CREATE DATABASE meridian;"
    psql -U your_user -d meridian -f backend/db/init.sql
    ```
 
-   On an existing database, apply the migrations in order:
+   **Existing install** — run only the migrations you haven't applied yet.
+   Each file in `backend/db/migrations/` is idempotent (`IF NOT EXISTS` / `ON CONFLICT DO NOTHING`).
+   Check your current state and apply from where you left off:
 
    ```bash
+   # Example: upgrading from Phase 1 (no migrations yet)
    psql -U your_user -d meridian -f backend/db/migrations/002_obsidian_notes.sql
    psql -U your_user -d meridian -f backend/db/migrations/003_email_summary.sql
    psql -U your_user -d meridian -f backend/db/migrations/004_sweep_completed_at.sql
@@ -190,6 +196,8 @@ calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
    psql -U your_user -d meridian -f backend/db/migrations/015_triage_mode.sql
    psql -U your_user -d meridian -f backend/db/migrations/016_scheduled_tasks.sql
    psql -U your_user -d meridian -f backend/db/migrations/017_afternoon_reviews.sql
+   psql -U your_user -d meridian -f backend/db/migrations/018_usage_log.sql
+   psql -U your_user -d meridian -f backend/db/migrations/019_oauth_state.sql
    ```
 
 3. (Optional) Point Meridian at your Obsidian vault for the memory layer by
