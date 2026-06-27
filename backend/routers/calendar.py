@@ -74,15 +74,3 @@ async def today_all(db: AsyncSession = Depends(get_db)):
             logger.warning("Could not fetch today's events for account %s", account["id"])
     all_events.sort(key=lambda e: e.get("start_time") or "")
     return {"events": all_events}
-
-
-@router.get("/today/{account_id}")
-async def today(account_id: int, db: AsyncSession = Depends(get_db)):
-    """Return today's events sorted by start time."""
-    return await calendar_service.get_today(account_id, db)
-
-
-@router.get("/upcoming/{account_id}")
-async def upcoming(account_id: int, db: AsyncSession = Depends(get_db)):
-    """Return events for the next 7 days sorted by start time."""
-    return await calendar_service.get_upcoming(account_id, db)

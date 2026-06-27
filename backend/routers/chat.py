@@ -29,6 +29,7 @@ from services import (
     obsidian_service,
     provider_service,
     settings_service,
+    usage_service,
     vector_service,
 )
 
@@ -478,7 +479,8 @@ async def _persist_exchange(
         ),
         {"content": reply, "tokens": total},
     )
-    # Accumulate today's usage rather than overwriting it.
+    # DEPRECATED: token_usage is legacy. Usage is tracked in usage_log via usage_service.
+    # This write is kept for backward compatibility only and will be removed in a future cleanup.
     await db.execute(
         text(
             """
@@ -632,18 +634,14 @@ async def get_messages(
 
 @router.get("/tokens/today", response_model=TokensToday)
 async def tokens_today(db: AsyncSession = Depends(get_db)):
-    """Return today's accumulated token usage."""
-    result = await db.execute(
-        text(
-            "SELECT input_tokens, output_tokens, total_tokens "
-            "FROM token_usage WHERE session_date = CURRENT_DATE"
-        )
-    )
-    row = result.mappings().first()
-    if row is None:
-        return TokensToday(total=0, input=0, output=0)
+    """Return today's accumulated token usage.
+
+    Reads from usage_log (the multi-provider source of truth) so this endpoint
+    and GET /usage/today return consistent data across all providers.
+    """
+    data = await usage_service.get_usage_today(db)
     return TokensToday(
-        total=row["total_tokens"],
-        input=row["input_tokens"],
-        output=row["output_tokens"],
+        total=data["total_tokens_today"],
+        input=data.get("by_provider", {}).get("anthropic", {}).get("types", {}).get("input_tokens", {}).get("units", 0),
+        output=data.get("by_provider", {}).get("anthropic", {}).get("types", {}).get("output_tokens", {}).get("units", 0),
     )
