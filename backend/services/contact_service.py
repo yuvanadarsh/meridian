@@ -15,7 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.database import AsyncSessionLocal
-from services import claude_service, vector_service
+from services import provider_service, vector_service
 
 logger = logging.getLogger(__name__)
 
@@ -31,15 +31,14 @@ def _split_addr(raw: str) -> tuple[str, str]:
     return name.strip(), addr.strip().lower()
 
 
-async def _extract_topics(contacts: list[dict]) -> dict[str, list[str]]:
-    """Ask Claude Haiku for 1-4 topics per contact from their email subjects.
+async def _extract_topics(contacts: list[dict], db: AsyncSession) -> dict[str, list[str]]:
+    """Ask the active provider's classify model for 1-4 topics per contact.
 
     Batched: one call per ``TOPIC_BATCH_SIZE`` contacts. Returns a map of
     ``email_address -> [topics]``. Degrades to empty topics on any failure —
     topics are a nice-to-have, never block the graph build.
     """
     topics_by_email: dict[str, list[str]] = {}
-    client = claude_service.get_client()
 
     for start in range(0, len(contacts), TOPIC_BATCH_SIZE):
         batch = contacts[start : start + TOPIC_BATCH_SIZE]
@@ -57,12 +56,7 @@ async def _extract_topics(contacts: list[dict]) -> dict[str, list[str]]:
             "Contacts (email :: subjects):\n" + "\n".join(lines)
         )
         try:
-            message = await client.messages.create(
-                model=claude_service.HAIKU_MODEL,
-                max_tokens=1000,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            raw = claude_service.extract_text(message)
+            raw = await provider_service.call_classify(db, prompt, max_tokens=1000)
             obj_start, obj_end = raw.find("{"), raw.rfind("}")
             data = json.loads(raw[obj_start : obj_end + 1]) if obj_start != -1 else {}
         except Exception:  # noqa: BLE001
@@ -162,7 +156,7 @@ async def build_contact_graph(account_id: int, db: AsyncSession) -> dict:
         return {"contacts": 0}
 
     contact_list = list(contacts.values())
-    topics_by_email = await _extract_topics(contact_list)
+    topics_by_email = await _extract_topics(contact_list, db)
 
     embed_config = await vector_service.get_embedding_config(db)
     expected_dim = embed_config["dim"]
