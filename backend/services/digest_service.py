@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from services import calendar_service, claude_service, gmail_service
+from services import calendar_service, gmail_service, provider_service, usage_service
 
 logger = logging.getLogger(__name__)
 
@@ -74,8 +74,13 @@ Categories:
 Be factual and concise. Today's date is {today}."""
 
 
-async def get_news_digest() -> str:
-    """Use Claude with the web search tool to fetch and summarize current news."""
+async def get_news_digest(db: AsyncSession) -> str:
+    """Use Claude with the web search tool to fetch and summarize current news.
+
+    Routes through provider_service to pick up the active provider's API key
+    and logs input/output usage to usage_log. Web search is Anthropic-specific;
+    if no Anthropic key is resolvable the function falls back gracefully.
+    """
     import anthropic
 
     from config import get_settings
@@ -83,8 +88,11 @@ async def get_news_digest() -> str:
     settings = get_settings()
     today = date.today().isoformat()
 
-    def _run() -> str:
-        sync_client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    active = await provider_service.get_active(db)
+    api_key = (active and active.get("api_key")) or settings.anthropic_api_key
+
+    def _run() -> tuple[str, int, int]:
+        sync_client = anthropic.Anthropic(api_key=api_key)
         response = sync_client.messages.create(
             model=DIGEST_MODEL,
             max_tokens=1500,
@@ -99,10 +107,17 @@ async def get_news_digest() -> str:
             ln for ln in raw.splitlines()
             if not ln.strip().startswith(("I'll", "I will", "Let me"))
         ]
-        return "\n".join(lines).strip()
+        return (
+            "\n".join(lines).strip(),
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+        )
 
     try:
-        return await asyncio.to_thread(_run)
+        text_out, in_tok, out_tok = await asyncio.to_thread(_run)
+        await usage_service.log_usage("anthropic", DIGEST_MODEL, "input_tokens", in_tok, db)
+        await usage_service.log_usage("anthropic", DIGEST_MODEL, "output_tokens", out_tok, db)
+        return text_out
     except Exception:  # noqa: BLE001
         logger.exception("News digest failed")
         return "News is unavailable right now."
@@ -224,15 +239,16 @@ STOCKS:
 
 
 async def _assemble_full_text(
-    *, calendar: str, emails: str, news: str, stocks: str
+    db: AsyncSession, *, calendar: str, emails: str, news: str, stocks: str
 ) -> str:
-    """Have Claude weave the four sections into voice-ready prose."""
+    """Have the active provider weave the four sections into voice-ready prose."""
     today = date.today().strftime("%B %-d, %Y")
     prompt = _ASSEMBLY_PROMPT.format(
         today=today, calendar=calendar, emails=emails, news=news, stocks=stocks
     )
     try:
-        reply, _ = await claude_service.chat(
+        reply, _ = await provider_service.call_chat(
+            db,
             system="You assemble concise spoken daily briefs.",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=800,
@@ -305,13 +321,15 @@ async def build_digest(db: AsyncSession) -> dict:
     calendar = await get_digest_calendar(db)
     emails = await get_digest_emails(db)
 
-    # Concurrent: both hit external APIs, no shared DB session
+    # News hits an external API (no shared DB session needed for the call itself,
+    # but db is passed for provider key resolution and usage logging).
+    # Stocks are pure yfinance — no DB needed. Run news + stocks concurrently.
     news, stocks = await asyncio.gather(
-        get_news_digest(),
+        get_news_digest(db),
         get_stock_summary(),
     )
     full_text = await _assemble_full_text(
-        calendar=calendar, emails=emails, news=news, stocks=stocks
+        db, calendar=calendar, emails=emails, news=news, stocks=stocks
     )
     return {
         "calendar": calendar,
