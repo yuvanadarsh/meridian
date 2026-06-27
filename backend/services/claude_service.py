@@ -32,6 +32,7 @@ def build_system_prompt(
     tone: str = "concise",
     today: str | None = None,
     allow_draft: bool = False,
+    self_email: str | None = None,
 ) -> str:
     """Assemble the chat system prompt.
 
@@ -61,6 +62,11 @@ def build_system_prompt(
         f"- You can {capabilities} when asked, using the action protocol below."
     )
     prompt += "\n\n" + _action_protocol(accounts or [], include_draft=allow_draft)
+    if self_email:
+        prompt += (
+            f"\n\nSELF-DRAFT OVERRIDE: The user is drafting this email to themselves. "
+            f"You MUST use {self_email} as the to_email. Do not use any other address."
+        )
     if email_context:
         prompt += "\n\nRELEVANT EMAILS:\n" + email_context
     for section in (contact_context, calendar_context, obsidian_context):

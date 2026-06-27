@@ -197,6 +197,20 @@ def is_draft_intent(message: str) -> bool:
     return any(phrase in msg_lower for phrase in DRAFT_TRIGGER_PHRASES)
 
 
+# Words/phrases that mean "send this to me" — must be resolved to the user's
+# own email address rather than running a normal contact search.
+_SELF_REFERENTIAL = {
+    "myself", "me", "my email", "to me", "yourself",
+    "my own email", "my gmail", "my account", "i", "my inbox",
+}
+
+
+def _is_self_referential(message: str) -> bool:
+    """True when the draft recipient is the user themselves."""
+    msg_lower = message.lower().strip()
+    return any(ref in msg_lower for ref in _SELF_REFERENTIAL)
+
+
 async def _calendar_context(db: AsyncSession) -> str:
     """Build a combined calendar block for all connected accounts.
 
@@ -556,6 +570,19 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
     email_context, context_source = await _get_context_tiered(payload.message, db, tier=tier)
     contact_context = await contact_service.get_contact_context(payload.message, db)
 
+    # Short-circuit contact lookup when the user is drafting to themselves so
+    # the most-recently-mentioned contact address is never substituted.
+    self_email: str | None = None
+    if draft_intent and _is_self_referential(payload.message):
+        result = await db.execute(text("SELECT email FROM gmail_accounts LIMIT 1"))
+        row = result.fetchone()
+        if row:
+            self_email = row.email
+            contact_context += (
+                f"\nDraft target: {self_email} (the user's own email address). "
+                "Use this address as to_email — do not substitute any other address."
+            )
+
     tone = await settings_service.get_value(db, "response_tone")
     system = claude_service.build_system_prompt(
         calendar_context=calendar_context,
@@ -565,6 +592,7 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
         accounts=accounts,
         tone=tone,
         allow_draft=draft_intent,
+        self_email=self_email,
     )
     if context_source != "none":
         system += f"\nContext source: {context_source}"
