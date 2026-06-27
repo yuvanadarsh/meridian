@@ -7,9 +7,11 @@ A single OAuth grant covers both Gmail (read / modify / send) and Calendar
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import os
+import secrets
 from datetime import datetime, timezone
 
 from google.auth.transport.requests import Request
@@ -54,26 +56,46 @@ def _client_config() -> dict:
     }
 
 
-def build_auth_url(label: str) -> str:
-    """Return the Google consent URL. ``label`` round-trips via the OAuth state."""
+def generate_pkce_pair() -> tuple[str, str]:
+    """Return (code_verifier, code_challenge) for a PKCE OAuth flow."""
+    code_verifier = secrets.token_urlsafe(64)
+    digest = hashlib.sha256(code_verifier.encode()).digest()
+    code_challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+    return code_verifier, code_challenge
+
+
+def build_auth_url(label: str, state: str, code_challenge: str | None = None) -> str:
+    """Return the Google consent URL.
+
+    ``state`` is a random CSRF token stored in ``oauth_state`` alongside the
+    PKCE code verifier. ``label`` is carried in that DB row, not in the state
+    string itself.
+    """
     flow = Flow.from_client_config(
         _client_config(), scopes=SCOPES, redirect_uri=REDIRECT_URI
     )
-    auth_url, _ = flow.authorization_url(
-        access_type="offline",
-        include_granted_scopes="true",
-        prompt="consent",  # force a refresh_token to be issued
-        state=label,
-    )
+    kwargs: dict = {
+        "access_type": "offline",
+        "include_granted_scopes": "true",
+        "prompt": "consent",  # force a refresh_token to be issued
+        "state": state,
+    }
+    if code_challenge:
+        kwargs["code_challenge"] = code_challenge
+        kwargs["code_challenge_method"] = "S256"
+    auth_url, _ = flow.authorization_url(**kwargs)
     return auth_url
 
 
-def exchange_code(code: str) -> Credentials:
+def exchange_code(code: str, code_verifier: str | None = None) -> Credentials:
     """Exchange an authorization code for OAuth credentials (blocking)."""
     flow = Flow.from_client_config(
         _client_config(), scopes=SCOPES, redirect_uri=REDIRECT_URI
     )
-    flow.fetch_token(code=code)
+    fetch_kwargs: dict = {"code": code}
+    if code_verifier:
+        fetch_kwargs["code_verifier"] = code_verifier
+    flow.fetch_token(**fetch_kwargs)
     return flow.credentials
 
 
@@ -116,7 +138,8 @@ async def list_accounts(db: AsyncSession) -> list[dict]:
         text(
             """
             SELECT ga.id, ga.email, ga.label, ga.last_synced_at,
-                   COALESCE(sp.status, 'idle') AS sweep_status
+                   COALESCE(sp.status, 'idle') AS sweep_status,
+                   COALESCE(ga.auth_status, 'ok') AS auth_status
             FROM gmail_accounts ga
             LEFT JOIN sweep_progress sp ON sp.account_id = ga.id
             ORDER BY ga.id

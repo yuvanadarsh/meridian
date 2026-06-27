@@ -52,11 +52,18 @@ function App() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const connected = params.get('connected')
+    const reauthed = params.get('reauthed')
     if (connected) {
       setJustConnectedEmail(connected)
       window.history.replaceState({}, '', window.location.pathname)
+    } else if (reauthed) {
+      // Re-auth succeeded — open Connections panel so the user can see the
+      // updated status without having to navigate there manually.
+      setMenuOpen(true)
+      setActivePanel('connections')
+      window.history.replaceState({}, '', window.location.pathname)
     }
-  }, [setJustConnectedEmail])
+  }, [setJustConnectedEmail, setMenuOpen, setActivePanel])
 
   // Resolve the just-connected email to its account id, then drop into the
   // onboarding flow (sweep → triage → vectorize) for that account.

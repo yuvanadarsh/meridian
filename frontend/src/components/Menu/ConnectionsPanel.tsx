@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { FiCheck, FiPlus, FiTrash2, FiX } from 'react-icons/fi'
+import { FiCheck, FiKey, FiPlus, FiTrash2, FiX } from 'react-icons/fi'
 import {
   HiChevronDown,
   HiOutlineCalendar,
   HiOutlineCircleStack,
   HiOutlineDocumentText,
   HiOutlineEnvelope,
+  HiOutlineExclamationTriangle,
 } from 'react-icons/hi2'
 
 import { api } from '../../api/client'
@@ -233,11 +234,33 @@ export function ConnectionsPanel() {
     setOpenAccordionId((prev) => (prev === accountId ? null : accountId))
   }
 
+  const expiredAccounts = accounts.filter((a) => a.auth_status === 'expired')
+
   return (
     <div className="flex flex-col gap-3">
       <p className="text-sm text-white/50">
         Connect any number of Google accounts. One sign-in covers Gmail and Calendar.
       </p>
+
+      {expiredAccounts.map((a) => (
+        <div
+          key={`expired-${a.id}`}
+          className="flex items-center justify-between gap-3 rounded-xl border border-amber-400/20 bg-amber-400/5 px-4 py-2.5"
+        >
+          <div className="flex items-center gap-2 text-sm text-amber-300/80">
+            <HiOutlineExclamationTriangle className="h-4 w-4 shrink-0" />
+            <span className="capitalize">{a.label || a.email}</span>
+            <span className="text-amber-300/50">account needs re-authentication</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => api.reauthAccount(a.id)}
+            className="shrink-0 rounded-full border border-amber-400/25 px-3 py-1 text-xs text-amber-300/80 transition-all hover:border-amber-400/40 hover:bg-amber-400/10 hover:text-amber-200"
+          >
+            Re-authenticate
+          </button>
+        </div>
+      ))}
 
       {error && <p className="text-sm text-rose-300/80">{error}</p>}
 
@@ -342,8 +365,19 @@ export function ConnectionsPanel() {
                   </div>
                 </div>
 
-                {/* Right controls — only trash and expand */}
+                {/* Right controls — re-auth (when expired), trash, expand */}
                 <div className="flex shrink-0 items-center gap-1">
+                  {account.auth_status === 'expired' && (
+                    <button
+                      type="button"
+                      aria-label={`Re-authenticate ${account.email}`}
+                      title="Token expired — click to re-authenticate"
+                      onClick={() => api.reauthAccount(account.id)}
+                      className="flex h-7 w-7 items-center justify-center rounded-full text-amber-400/60 transition-colors hover:bg-amber-400/10 hover:text-amber-300"
+                    >
+                      <FiKey size={14} />
+                    </button>
+                  )}
                   <button
                     type="button"
                     aria-label={`Remove ${account.email}`}
