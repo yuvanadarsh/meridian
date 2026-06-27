@@ -102,7 +102,7 @@ meridian/
 │   │   ├── gmail_service.py      # Gmail API + sweep logic
 │   │   ├── calendar_service.py
 │   │   ├── claude_service.py
-│   │   ├── elevenlabs_service.py
+│   │   ├── elevenlabs_service.py   # TTS is currently handled inline in voice.py; this file is planned but not yet created
 │   │   ├── vector_service.py     # VoyageAI + pgvector
 │   │   └── triage_service.py     # Email triage classification
 │   ├── models/
@@ -248,6 +248,8 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     created_at TIMESTAMP DEFAULT NOW()
 );
 
+-- DEPRECATED: token_usage is the Phase 1 Anthropic-only counter.
+-- New code reads and writes usage_log instead (multi-provider, see migration 018).
 CREATE TABLE IF NOT EXISTS token_usage (
     id SERIAL PRIMARY KEY,
     session_date DATE DEFAULT CURRENT_DATE UNIQUE,
