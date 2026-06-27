@@ -253,6 +253,76 @@ async def append_review_summaries(
 
 
 # ---------------------------------------------------------------------------
+# Persistent chats — mirror long-lived conversations into Chats/{title}.md
+# ---------------------------------------------------------------------------
+
+
+def _safe_filename(name: str, limit: int = 80) -> str:
+    """Sanitize a title into a filesystem-safe note stem."""
+    return re.sub(r"[^\w\s-]", "", name)[:limit].strip().replace(" ", "-") or "untitled"
+
+
+async def write_chat_note(
+    title: str,
+    created_at: datetime,
+    updated_at: datetime,
+    user_message: str,
+    assistant_message: str,
+) -> str | None:
+    """Create a persistent-chat note with the full header and first exchange.
+
+    Returns the absolute note path so the caller can store it for later appends,
+    or None when no vault is configured.
+    """
+    vault = vault_path()
+    if vault is None:
+        return None
+
+    def _write() -> str | None:
+        try:
+            chats_dir = vault / "Chats"
+            chats_dir.mkdir(parents=True, exist_ok=True)
+            note_path = chats_dir / f"{_safe_filename(title)}.md"
+            header = (
+                f"# {title}\n\n"
+                f"*Created: {_format_date(created_at)} · "
+                f"Last updated: {_format_date(updated_at)}*\n\n"
+                "## Conversation\n\n"
+                f"**You:** {user_message.strip()}\n\n"
+                f"**Meridian:** {assistant_message.strip()}\n\n---\n"
+            )
+            note_path.write_text(header, encoding="utf-8")
+            return str(note_path)
+        except OSError:
+            logger.exception("Failed to write persistent-chat note")
+            return None
+
+    return await asyncio.to_thread(_write)
+
+
+async def append_to_chat_note(
+    note_path: str, user_message: str, assistant_message: str
+) -> bool:
+    """Append one exchange to an existing persistent-chat note (never overwrites)."""
+    if not note_path:
+        return False
+
+    async def _append() -> bool:
+        try:
+            async with aiofiles.open(note_path, "a", encoding="utf-8") as f:
+                await f.write(
+                    f"\n**You:** {user_message.strip()}\n\n"
+                    f"**Meridian:** {assistant_message.strip()}\n\n---\n"
+                )
+            return True
+        except OSError:
+            logger.exception("Failed to append to persistent-chat note %s", note_path)
+            return False
+
+    return await _append()
+
+
+# ---------------------------------------------------------------------------
 # Vault ingestion — pull .md files into PostgreSQL for RAG retrieval
 # ---------------------------------------------------------------------------
 
