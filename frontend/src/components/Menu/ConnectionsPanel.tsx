@@ -13,7 +13,6 @@ import {
 import { api } from '../../api/client'
 import type { GmailAccount } from '../../api/client'
 import { useMeridianStore } from '../../store/meridianStore'
-import { ContactsSection } from './ContactsSection'
 
 /** "Synced 5 min ago" style relative time, or null when never swept. */
 function relativeTime(iso: string | null): string | null {
@@ -554,8 +553,6 @@ export function ConnectionsPanel() {
           <FiPlus size={16} /> Add account
         </button>
       )}
-
-      {accounts.length > 0 && <ContactsSection accounts={accounts} />}
     </div>
   )
 }
