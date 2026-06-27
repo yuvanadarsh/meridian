@@ -4,6 +4,7 @@ import { api } from '../api/client'
 import { PageLayout } from '../components/Layout/PageLayout'
 import { AIProvidersSection } from '../components/Menu/AIProvidersSection'
 import { EmbeddingsSection } from '../components/Menu/EmbeddingsSection'
+import { ScheduledTasksSection } from '../components/Settings/ScheduledTasksSection'
 import { SettingsCard } from '../components/Settings/SettingsCard'
 import { Toggle } from '../components/Settings/Toggle'
 
@@ -190,6 +191,13 @@ export function SettingsPage() {
             description="Switching models invalidates all vector data and requires a full re-embed."
           >
             <EmbeddingsSection />
+          </SettingsCard>
+
+          <SettingsCard
+            title="Scheduled Tasks"
+            description="Automated tasks that run on a schedule."
+          >
+            <ScheduledTasksSection />
           </SettingsCard>
         </div>
       )}
