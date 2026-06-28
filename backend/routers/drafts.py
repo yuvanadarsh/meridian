@@ -86,6 +86,19 @@ async def list_drafts(db: AsyncSession = Depends(get_db)):
     return [DraftOut(**dict(row)) for row in result.mappings().all()]
 
 
+@router.get("/{draft_id}", response_model=DraftOut)
+async def get_draft(draft_id: int, db: AsyncSession = Depends(get_db)):
+    """Return a single draft by id (used by the draft detail page)."""
+    result = await db.execute(
+        text(f"SELECT {_DRAFT_COLUMNS} FROM drafts WHERE id = :id"),
+        {"id": draft_id},
+    )
+    row = result.mappings().first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    return DraftOut(**dict(row))
+
+
 @router.patch("/{draft_id}", response_model=DraftOut)
 async def edit_draft(
     draft_id: int, payload: DraftEdit, db: AsyncSession = Depends(get_db)
