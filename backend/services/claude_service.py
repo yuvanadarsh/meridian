@@ -5,7 +5,8 @@ reasoning, drafting, and triage classification.
 """
 
 import logging
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from anthropic import AsyncAnthropic
 from anthropic.types import Message, Usage
@@ -33,6 +34,7 @@ def build_system_prompt(
     today: str | None = None,
     allow_draft: bool = False,
     self_email: str | None = None,
+    user_tz: str | None = None,
 ) -> str:
     """Assemble the chat system prompt.
 
@@ -47,7 +49,12 @@ def build_system_prompt(
     entirely so Claude cannot accidentally emit a ``DRAFT_EMAIL:`` token in
     response to a plain question that merely mentions email.
     """
-    today_date = today or date.today().isoformat()
+    if user_tz:
+        local_now: datetime | None = datetime.now(ZoneInfo(user_tz))
+        today_date = local_now.date().isoformat()
+    else:
+        local_now = None
+        today_date = today or date.today().isoformat()
     capabilities = (
         "draft emails and create calendar events" if allow_draft else "create calendar events"
     )
@@ -61,7 +68,12 @@ def build_system_prompt(
         "- Never claim you lack access to calendar or email data without first checking the context provided below.\n"
         f"- You can {capabilities} when asked, using the action protocol below."
     )
-    prompt += "\n\n" + _action_protocol(accounts or [], include_draft=allow_draft)
+    if local_now:
+        prompt += (
+            f"\n\nCurrent date and time (user's local timezone {user_tz}): "
+            f"{local_now.strftime('%A, %B %d, %Y at %I:%M %p')}"
+        )
+    prompt += "\n\n" + _action_protocol(accounts or [], include_draft=allow_draft, user_tz=user_tz)
     if self_email:
         prompt += (
             f"\n\nSELF-DRAFT OVERRIDE: The user is drafting this email to themselves. "
@@ -83,7 +95,7 @@ _TONE_RULES = {
 }
 
 
-def _action_protocol(accounts: list[dict], *, include_draft: bool = False) -> str:
+def _action_protocol(accounts: list[dict], *, include_draft: bool = False, user_tz: str | None = None) -> str:
     """Instructions that let Claude trigger draft/calendar actions via tokens.
 
     ``chat.py`` intercepts the emitted ``DRAFT_EMAIL:`` / ``CALENDAR_CREATE:``
@@ -119,7 +131,7 @@ def _action_protocol(accounts: list[dict], *, include_draft: bool = False) -> st
         "If the user asks you to schedule, create, or add a calendar event, respond with ONLY this "
         "JSON on the first line, then your confirmation message:\n"
         'CALENDAR_CREATE:{"account_id":' + str(default_id) + ',"title":"...","start":"2026-06-19T15:00:00","end":"2026-06-19T16:00:00","description":""}\n'
-        "Times are local (America/New_York), ISO 8601, no timezone suffix. Default events to one "
+        f"Times are local ({user_tz or 'America/New_York'}), ISO 8601, no timezone suffix. Default events to one "
         "hour when the user gives only a start time.\n"
         "If a previous event creation warned about a scheduling conflict and the user now confirms "
         "they want it anyway, respond with ONLY this token on the first line, then a confirmation:\n"

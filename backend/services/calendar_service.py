@@ -141,13 +141,15 @@ async def create_event(
     end_time: str,
     db: AsyncSession,
     description: str = "",
+    user_tz: str | None = None,
 ) -> dict:
     """Create a Google Calendar event and mirror it into ``calendar_events``.
 
     ``start_time`` / ``end_time`` are ISO 8601 strings without a timezone
-    suffix; they're interpreted in ``DEFAULT_TIMEZONE``. Returns the Google API
-    insert result.
+    suffix; they're interpreted in ``user_tz`` (falls back to ``DEFAULT_TIMEZONE``).
+    Returns the Google API insert result.
     """
+    tz = user_tz or DEFAULT_TIMEZONE
     creds = await gmail_service.load_credentials(db, account_id)
     service = await asyncio.to_thread(
         lambda: gmail_service.build(
@@ -158,8 +160,8 @@ async def create_event(
     event_body = {
         "summary": title,
         "description": description,
-        "start": {"dateTime": start_time, "timeZone": DEFAULT_TIMEZONE},
-        "end": {"dateTime": end_time, "timeZone": DEFAULT_TIMEZONE},
+        "start": {"dateTime": start_time, "timeZone": tz},
+        "end": {"dateTime": end_time, "timeZone": tz},
     }
     result = await asyncio.to_thread(
         lambda: service.events()
