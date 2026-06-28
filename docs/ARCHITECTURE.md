@@ -13,201 +13,169 @@ indexed into pgvector and queried via a tiered RAG pipeline.
 
 ## Architecture Diagram
 
+### System Overview
+
 ```mermaid
-flowchart TD
+flowchart LR
+    FE["Frontend\nReact + Vite\n11 pages"]
+    BE["Backend\nFastAPI\n14 routers"]
+    DB[("PostgreSQL\n+ pgvector\n19 tables")]
+    OBS[("Obsidian Vault\nfilesystem")]
+    EXT["External APIs\nAnthropic · VoyageAI\nElevenLabs · Google"]
 
-    %% ── External APIs ──────────────────────────────────────────────────────────
-    subgraph Ext["External APIs"]
-        direction LR
-        ClaudeAPI["Anthropic Claude API\nsonnet-4-6 · haiku-4-5"]
-        VoyageAPI["VoyageAI\nvoyage-3-lite, 512 dims"]
-        ElevenLabsAPI["ElevenLabs TTS"]
-        GmailAPI["Gmail API"]
-        CalAPI["Google Calendar API"]
-    end
+    FE -->|"HTTP"| BE
+    BE -->|"SQLAlchemy async"| DB
+    BE -->|"aiofiles"| OBS
+    OBS -->|"vault watcher"| BE
+    BE -->|"API calls"| EXT
+```
 
-    %% ── Frontend ───────────────────────────────────────────────────────────────
-    subgraph FE["Frontend — React + Vite + TypeScript + Tailwind"]
-        direction LR
-        Home["/ Home\norb + chat modal"]
-        ChatPage["/chat\nPersistent Chat"]
-        ChatDetail["/chat/:id\nChat Thread"]
-        AnalyticsPage["/analytics"]
-        BriefPage["/brief\nDaily Brief"]
-        ReviewPage["/review\nDaily Review"]
-        DraftsPage["/drafts"]
-        CalPage["/calendar"]
-        ContactsPage["/contacts"]
-        ConnectionsPage["/connections\nAccount Setup & Onboarding"]
-        SettingsPage["/settings"]
-    end
+### Pipeline 1 — Chat & RAG
 
-    %% ── Backend Routers ────────────────────────────────────────────────────────
-    subgraph Routers["Backend Routers — FastAPI"]
-        direction TB
-        ChatR["chat.py\nRAG · action tokens · context assembly"]
-        GmailR["gmail.py\nOAuth · sweep · triage approval"]
-        CalR["calendar.py\nread events · create event"]
-        PChatsR["persistent_chats.py\nCRUD · auto-title"]
-        ReviewR["review.py\nafternoon review"]
-        UsageR["usage.py\ncost aggregation"]
-        TasksR["tasks.py\nscheduled task CRUD"]
-        SettingsR["settings.py\nkey/value settings"]
-        ContactsR["contacts.py\ncontact graph + Obsidian export"]
-        DigestR["digest.py\nmorning brief"]
-        DraftsR["drafts.py\ndraft CRUD + send"]
-        VoiceR["voice.py\npush-to-talk + TTS"]
-        SuperchargeR["supercharge.py\nAI chat export import"]
-        ObsidianR["obsidian.py\ndaily note append"]
-    end
+```mermaid
+flowchart LR
+    User["User\ntype or voice"]
+    ChatR["chat.py router"]
+    ClaudeSvc["claude_service\nbuild_system_prompt()"]
+    ProvSvc["provider_service\ncall_chat()"]
+    ClaudeAPI["Anthropic\nClaude API"]
+    ObsSvc["obsidian_service\nTier 1 RAG search"]
+    VecSvc["vector_service\nfallback search"]
+    GmailSvc["gmail_service\nTier 2 full thread"]
+    GmailAPI["Gmail API"]
+    CalSvc["calendar_service\nCREATE action token"]
+    CalAPI["Google Calendar API"]
+    VoiceR["voice.py"]
+    ElevenLabs["ElevenLabs TTS"]
+    ObsDaily["Obsidian\nDaily note"]
 
-    %% ── Backend Services ───────────────────────────────────────────────────────
-    subgraph Services["Backend Services"]
-        direction TB
-        ProvSvc["provider_service\nmulti-provider AI routing\nAnthropicSDK · OpenAI-compat\nencrypted key decryption · usage logging"]
-        ClaudeSvc["claude_service\nsystem prompt builder\ntone · calendar/email context\naction protocol · allow_draft gate"]
-        VecSvc["vector_service\nVoyageAI embedding\nhybrid BM25+vector search\nReciprocal Rank Fusion"]
-        ObsSvc["obsidian_service\nvault watcher · daily notes\nnote vectorizer · RAG retrieval\nthread + contact export"]
-        GmailSvc["gmail_service\nOAuth/PKCE · MIME tree parser\nsweep + rate limiting\ntier-2 full thread fetch"]
-        DigestSvc["digest_service\ncalendar + email + news + stocks\nvoice-ready plain text · digest_cache"]
-        TriageSvc["triage_service\nbatch classification (Haiku)\nkeep / archive / trash / unreadable"]
-        DraftSvc["draft_service\nRAG style profile\ndraft generation"]
-        CalSvc["calendar_service\nevent sync · conflict detection\ncreate via action token"]
-        UsageSvc["usage_service\nper-call cost logging\nusage_log table"]
-        ThreadSvc["thread_service\nthread grouping · participant index\nhybrid search over email_threads"]
-        ContactSvc["contact_service\ncontact graph · topic extraction\nObsidian Contacts/ export"]
-    end
+    User -->|"POST /chat/message"| ChatR
+    ChatR -->|"assemble context"| ClaudeSvc
+    ClaudeSvc --> ProvSvc
+    ProvSvc --> ClaudeAPI
+    ChatR -->|"tier 1: Obsidian notes"| ObsSvc
+    ChatR -->|"fallback: email vectors"| VecSvc
+    ChatR -->|"tier 2: tell me more"| GmailSvc
+    GmailSvc --> GmailAPI
+    ChatR -->|"CALENDAR_CREATE token"| CalSvc
+    CalSvc --> CalAPI
+    ChatR -->|"append exchange"| ObsDaily
+    User -->|"push-to-talk"| VoiceR
+    VoiceR --> ElevenLabs
+```
 
-    %% ── Scheduled Tasks ────────────────────────────────────────────────────────
-    subgraph Tasks["Scheduled Tasks — services/tasks/"]
-        direction LR
-        Scheduler["run_task_scheduler\nmain.py lifespan · wakes every 60s\nreads scheduled_tasks table\nuser timezone-aware"]
-        EmailPoll["email_poll\nevery 15 min\nno AI calls\nstores as pending"]
-        MBTask["morning_brief\n08:00 default\ndigest_cache upsert"]
-        ARTask["afternoon_review\n17:00 default\ntriage + draft queue\nafternoon_reviews table"]
-        CSTask["calendar_sync\n07:00 default\nupsert calendar_events"]
-    end
+### Pipeline 2 — Email Sweep
 
-    %% ── PostgreSQL ─────────────────────────────────────────────────────────────
-    subgraph DB["PostgreSQL + pgvector — host machine"]
-        EmailsDB[("emails\nemail_threads\ngmail_accounts\nsweep_progress")]
-        ObsNotesDB[("obsidian_notes\nvector 512 dims")]
-        ContactsDB[("contacts\nvector 512 dims")]
-        ChatDB[("chat_messages\npersistent_chats\npersistent_chat_messages")]
-        OpsDB[("drafts · calendar_events\nafternoon_reviews · digest_cache\nscheduled_tasks · user_settings\nai_providers · oauth_state\nusage_log · supercharge_imports")]
-    end
+```mermaid
+flowchart LR
+    UI["Connections Page"]
+    GmailR["gmail.py router"]
+    GmailSvc["gmail_service\nbatch fetch · MIME parser"]
+    GmailAPI["Gmail API"]
+    TriageSvc["triage_service\nbatch 25 emails/call"]
+    Haiku["Claude Haiku\nclassify"]
+    User2["User approval\nReview page"]
+    VecSvc["vector_service\nembed keep + archive"]
+    VoyageAPI["VoyageAI"]
+    ThreadSvc["thread_service\ngroup by thread_id"]
+    ObsSvc["obsidian_service\nexport threads + contacts"]
+    ObsVault["Obsidian Vault\nEmails/ · Contacts/"]
+    DB[("emails\nemail_threads\ncontacts")]
 
-    %% ── Obsidian Vault ─────────────────────────────────────────────────────────
-    ObsVault[("Obsidian Vault — filesystem\nDaily/YYYY-MM-DD.md\nEmails/Contact/Subject.md\nContacts/Name.md\nChats/ · AI Conversations/")]
+    UI -->|"POST /gmail/sweep"| GmailR
+    GmailR --> GmailSvc
+    GmailSvc -->|"messages.list/get"| GmailAPI
+    GmailR --> TriageSvc
+    TriageSvc --> Haiku
+    GmailR -->|"show results"| User2
+    User2 -->|"POST /gmail/triage/approve"| GmailR
+    GmailR --> VecSvc
+    VecSvc --> VoyageAPI
+    VecSvc --> DB
+    GmailR --> ThreadSvc
+    ThreadSvc --> DB
+    GmailR --> ObsSvc
+    ObsSvc -->|"write notes"| ObsVault
+```
 
-    %% ═══════════════════════════════════════════════════════════════════════════
-    %% Pipeline 1 — Chat & RAG
-    %% ═══════════════════════════════════════════════════════════════════════════
-    subgraph ChatPipeline["Pipeline 1 — Chat & RAG"]
-        direction LR
-        Home -->|"POST /chat/message"| ChatR
-        ChatR -->|"build system prompt"| ClaudeSvc
-        ClaudeSvc -->|"assembled prompt"| ProvSvc
-        ProvSvc -->|"Anthropic SDK"| ClaudeAPI
-        ChatR -->|"tier 1: Obsidian note search"| ObsSvc
-        ChatR -->|"tier 1 fallback: email vectors"| VecSvc
-        ChatR -->|"tier 2 phrases: full thread"| GmailSvc
-        GmailSvc -->|"messages.threads.get"| GmailAPI
-        ChatR -->|"CREATE_CALENDAR_EVENT token"| CalSvc
-        CalSvc -->|"events.insert"| CalAPI
-        Home -->|"push-to-talk"| VoiceR
-        VoiceR -->|"ElevenLabs synthesis"| ElevenLabsAPI
-    end
+### Pipeline 3 — Scheduled Tasks
 
-    %% ═══════════════════════════════════════════════════════════════════════════
-    %% Pipeline 2 — Email Sweep
-    %% ═══════════════════════════════════════════════════════════════════════════
-    subgraph SweepPipeline["Pipeline 2 — Email Sweep"]
-        direction LR
-        ConnectionsPage -->|"POST /gmail/sweep/{account_id}"| GmailR
-        GmailR -->|"messages.list + messages.get\nbatch 25, 0.1s delay, 429 backoff"| GmailSvc2["gmail_service"]
-        GmailSvc2 -->|"MIME tree parser"| GmailAPI
-        GmailR -->|"batch classify 25 emails/call"| TriageSvc
-        TriageSvc -->|"Haiku model"| ProvSvc
-        GmailR -->|"user approves in UI"| VecSvc
-        VecSvc -->|"embed keep + archive"| VoyageAPI
-        GmailR --> ThreadSvc
-        ThreadSvc --> EmailsDB
-        GmailR -->|"export threads + contacts"| ObsSvc
-        ObsSvc -->|"write Emails/ + Contacts/ notes"| ObsVault
-    end
+```mermaid
+flowchart LR
+    Scheduler["run_task_scheduler\nmain.py · wakes every 60s\nreads scheduled_tasks table"]
+    EmailPoll["email_poll\nevery 15 min · no AI calls"]
+    MBTask["morning_brief\n08:00 local time"]
+    ARTask["afternoon_review\n17:00 local time"]
+    CSTask["calendar_sync\n07:00 local time"]
+    GmailSvc["gmail_service"]
+    GmailAPI["Gmail API"]
+    DigestSvc["digest_service\ncalendar + email + news + stocks"]
+    ProvSvc["provider_service"]
+    CalAPI["Google Calendar API"]
+    TriageSvc["triage_service"]
+    DraftSvc["draft_service"]
+    DB[("afternoon_reviews\ndigest_cache\ncalendar_events")]
 
-    %% ═══════════════════════════════════════════════════════════════════════════
-    %% Pipeline 3 — Scheduled Tasks
-    %% ═══════════════════════════════════════════════════════════════════════════
-    subgraph ScheduledPipeline["Pipeline 3 — Scheduled Tasks"]
-        direction LR
-        Scheduler -->|"every 15 min"| EmailPoll
-        Scheduler -->|"08:00 local time"| MBTask
-        Scheduler -->|"17:00 local time"| ARTask
-        Scheduler -->|"07:00 local time"| CSTask
-        EmailPoll -->|"sweep new mail"| GmailSvc
-        MBTask --> DigestSvc
-        DigestSvc -->|"news + digest assembly (Haiku)"| ProvSvc
-        DigestSvc --> OpsDB
-        CSTask --> CalSvc
-        CalSvc -->|"events.list"| CalAPI
-        ARTask --> TriageSvc
-        ARTask --> DraftSvc
-        DraftSvc -->|"RAG style profile + draft"| ProvSvc
-        ARTask --> OpsDB
-    end
+    Scheduler -->|"every 15 min"| EmailPoll
+    Scheduler -->|"08:00"| MBTask
+    Scheduler -->|"17:00"| ARTask
+    Scheduler -->|"07:00"| CSTask
+    EmailPoll --> GmailSvc
+    GmailSvc --> GmailAPI
+    MBTask --> DigestSvc
+    DigestSvc --> ProvSvc
+    DigestSvc --> DB
+    CSTask -->|"events.list"| CalAPI
+    CSTask --> DB
+    ARTask --> TriageSvc
+    ARTask --> DraftSvc
+    TriageSvc --> ProvSvc
+    DraftSvc --> ProvSvc
+    ARTask --> DB
+```
 
-    %% ═══════════════════════════════════════════════════════════════════════════
-    %% Pipeline 4 — Obsidian Memory
-    %% ═══════════════════════════════════════════════════════════════════════════
-    subgraph ObsidianPipeline["Pipeline 4 — Obsidian Memory"]
-        direction LR
-        ObsVault -->|"watch_vault every 30s\nscan_vault_on_startup"| ObsSvc
-        ObsSvc -->|"index .md files"| ObsNotesDB
-        ObsSvc -->|"embed notes batch=128\nvectorize_notes_loop every 5min"| VecSvc
-        VecSvc -->|"voyage-3-lite"| VoyageAPI
-        VecSvc -->|"pgvector cosine search"| ObsNotesDB
-        PChatsR -->|"mirror to Chats/ vault note"| ObsVault
-    end
+### Pipeline 4 — Obsidian Memory
 
-    %% ═══════════════════════════════════════════════════════════════════════════
-    %% Pipeline 5 — OAuth Flow
-    %% ═══════════════════════════════════════════════════════════════════════════
-    subgraph OAuthPipeline["Pipeline 5 — OAuth Flow"]
-        direction LR
-        ConnectionsPage -->|"GET /gmail/auth?label="| GmailR
-        GmailR -->|"PKCE verifier saved"| OpsDB
-        GmailR -->|"redirect to consent"| GmailAPI
-        GmailR -->|"code exchange\ntoken stored in gmail_accounts"| EmailsDB
-    end
+```mermaid
+flowchart LR
+    ObsVault["Obsidian Vault\nfilesystem"]
+    ObsSvc["obsidian_service\nwatch_vault every 30s\nvectorize_notes_loop every 5min"]
+    ObsNotesDB[("obsidian_notes\nvector 512 dims")]
+    VecSvc["vector_service\nembed + cosine search"]
+    VoyageAPI["VoyageAI\nvoyage-3-lite"]
+    ChatR["chat.py\nRAG retrieval"]
+    PChatsR["persistent_chats.py\nappend to Chats/ note"]
 
-    %% ── Shared wiring ──────────────────────────────────────────────────────────
-    ProvSvc --> UsageSvc
-    UsageSvc --> OpsDB
-    VecSvc --> EmailsDB
-    VecSvc --> ObsNotesDB
-    ContactSvc --> ContactsDB
-    CalSvc --> OpsDB
-    PChatsR --> ChatDB
+    ObsVault -->|"scan + watch"| ObsSvc
+    ObsSvc -->|"index .md files"| ObsNotesDB
+    ObsSvc -->|"batch embed 128 notes"| VecSvc
+    VecSvc -->|"voyage-3-lite"| VoyageAPI
+    VecSvc -->|"store embeddings"| ObsNotesDB
+    ObsNotesDB -->|"pgvector similarity"| VecSvc
+    VecSvc -->|"top 5 notes"| ChatR
+    PChatsR -->|"mirror exchange"| ObsVault
+```
 
-    ChatPage --> PChatsR
-    ChatDetail --> PChatsR
-    AnalyticsPage --> UsageR
-    UsageR --> OpsDB
-    BriefPage --> DigestR
-    DigestR --> DigestSvc
-    ReviewPage --> ReviewR
-    ReviewR --> OpsDB
-    DraftsPage --> DraftsR
-    DraftsR --> OpsDB
-    CalPage --> CalR
-    CalR --> CalSvc
-    ContactsPage --> ContactsR
-    ContactsR --> ContactSvc
-    SettingsPage --> SettingsR
-    SettingsR --> OpsDB
-    TasksR --> OpsDB
+### Pipeline 5 — OAuth Flow
+
+```mermaid
+flowchart LR
+    UI["Connections Page\nor re-auth banner"]
+    GmailR["gmail.py router\nGET /gmail/auth\nGET /gmail/reauth/:id"]
+    PKCE["generate_pkce_pair()\ncode_verifier + code_challenge"]
+    OAuthState[("oauth_state table\nstate → verifier")]
+    Google["Google OAuth\nconsent screen"]
+    Callback["GET /gmail/callback\ncode + state"]
+    TokenStore[("gmail_accounts\noauth_token\nauth_status")]
+
+    UI -->|"connect / reauth"| GmailR
+    GmailR --> PKCE
+    PKCE -->|"save verifier"| OAuthState
+    GmailR -->|"redirect"| Google
+    Google -->|"authorization code"| Callback
+    Callback -->|"retrieve verifier"| OAuthState
+    Callback -->|"exchange code → tokens"| TokenStore
+    OAuthState -->|"delete row"| OAuthState
 ```
 
 ## Pipeline Descriptions
