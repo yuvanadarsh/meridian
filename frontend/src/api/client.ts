@@ -113,6 +113,33 @@ export interface Draft {
   updated_at: string
 }
 
+export type QueueClassification = 'trash' | 'archive' | 'keep' | 'draft'
+
+export type DraftStatus = 'generating' | 'ready' | 'sent' | null
+
+export interface QueueItem {
+  id: number
+  email_id: number
+  classification: QueueClassification
+  ai_summary: string | null
+  needs_draft: boolean
+  draft_id: number | null
+  draft_status: DraftStatus
+  created_at: string
+  subject: string | null
+  from_address: string | null
+  received_at: string | null
+  snippet: string | null
+}
+
+export interface QueueSummary {
+  trash: number
+  archive: number
+  keep: number
+  draft: number
+  total: number
+}
+
 export interface SuperchargeUpload {
   import_id: number
   provider: string
@@ -214,33 +241,6 @@ export interface UsageHistory {
 }
 
 export type UsageTimeframe = 'daily' | 'weekly' | 'monthly' | 'yearly'
-
-export interface CalendarSuggestion {
-  detected: boolean
-  email_id: number
-  from: string | null
-  subject: string | null
-}
-
-export interface ReviewEmail {
-  email_id: number
-  subject: string | null
-  from: string | null
-  classification: 'keep' | 'archive' | 'trash'
-  summary: string
-  needs_reply: boolean
-  draft_id: number | null
-  received_at: string | null
-  calendar_suggestion?: CalendarSuggestion
-}
-
-export interface DailyReview {
-  review_date: string
-  emails: ReviewEmail[]
-  status: 'pending' | 'approved' | 'dismissed'
-  approved_at: string | null
-  updated_at: string | null
-}
 
 export interface ScheduledTask {
   id: number
@@ -350,15 +350,50 @@ export const api = {
 
   // Drafts
   getDrafts: () => request<Draft[]>('/drafts'),
-  editDraft: (draftId: number, body: string) =>
+  getDraft: (draftId: number | string) => request<Draft>(`/drafts/${draftId}`),
+  editDraft: (draftId: number | string, body: string) =>
     request<Draft>(`/drafts/${draftId}`, {
       method: 'PATCH',
       body: JSON.stringify({ body }),
     }),
-  sendDraft: (draftId: number) =>
-    request<Draft>(`/drafts/${draftId}/send`, { method: 'POST' }),
-  discardDraft: (draftId: number) =>
+  // Sends a draft. When `body` is given, the edit is persisted first so the
+  // sent email reflects any inline changes from the detail page.
+  sendDraft: async (
+    draftId: number | string,
+    opts?: { body?: string },
+  ): Promise<Draft> => {
+    if (opts?.body !== undefined) {
+      await request<Draft>(`/drafts/${draftId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ body: opts.body }),
+      })
+    }
+    return request<Draft>(`/drafts/${draftId}/send`, { method: 'POST' })
+  },
+  discardDraft: (draftId: number | string) =>
     request<{ status: string; id: number }>(`/drafts/${draftId}`, { method: 'DELETE' }),
+
+  // Inbox queue
+  getInboxQueue: () => request<QueueItem[]>('/inbox/queue'),
+  getInboxSummary: () => request<QueueSummary>('/inbox/queue/summary'),
+  triggerInbox: () =>
+    request<{ result: { status: string; summary: string }; queue: QueueItem[] }>(
+      '/inbox/trigger',
+    ),
+  approveInbox: (ids: number[], overrides: Record<string, string> = {}) =>
+    request<{ approved: number; trashed: number; archived: number }>('/inbox/approve', {
+      method: 'POST',
+      body: JSON.stringify({ ids, overrides }),
+    }),
+  generateDraftFromQueue: (id: number) =>
+    request<{ draft_id: number; status: string }>(
+      `/inbox/queue/${id}/generate-draft`,
+      { method: 'POST' },
+    ),
+  dismissQueueItem: (id: number) =>
+    request<{ dismissed: boolean; id: number }>(`/inbox/queue/${id}`, {
+      method: 'DELETE',
+    }),
 
   // Threads
   buildThreads: (accountId: number) =>
@@ -454,30 +489,6 @@ export const api = {
     request<{ processed: number; total: number; done?: boolean }>(
       '/contacts/obsidian-export/progress',
     ),
-
-  // Daily review
-  getReview: () => request<{ review: DailyReview | null }>('/review/today'),
-  triggerReview: () =>
-    request<{ result: { status: string; summary: string }; review: DailyReview | null }>(
-      '/review/trigger',
-    ),
-  approveReview: (overrides: Record<string, string> = {}) =>
-    request<{
-      status: string
-      applied: { trashed: number; archived: number }
-      review: DailyReview | null
-    }>('/review/approve', {
-      method: 'POST',
-      body: JSON.stringify({ overrides }),
-    }),
-  dismissReview: () =>
-    request<{ status: string; review: DailyReview | null }>('/review/dismiss', {
-      method: 'POST',
-    }),
-  reopenReview: () =>
-    request<{ status: string; review: DailyReview | null }>('/review/reopen', {
-      method: 'POST',
-    }),
 
   // Usage tracking
   getUsageToday: () =>
