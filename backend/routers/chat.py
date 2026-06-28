@@ -194,6 +194,36 @@ def _is_self_referential(message: str) -> bool:
     return any(ref in msg_lower for ref in _SELF_REFERENTIAL)
 
 
+async def _inbox_context(db: AsyncSession) -> str:
+    """Summarize the unapproved email queue so Claude can answer "what's pending?".
+
+    Returns a short block describing how many emails are waiting in each
+    classification, or an empty-queue note. This lets the model answer inbox
+    status questions directly from the system prompt without any tool call.
+    """
+    result = await db.execute(
+        text(
+            """
+            SELECT classification, COUNT(*) AS count
+            FROM email_queue
+            WHERE approved_at IS NULL
+            GROUP BY classification
+            """
+        )
+    )
+    summary = {row.classification: row.count for row in result.fetchall()}
+    total = sum(summary.values())
+    if total == 0:
+        return "Inbox queue is empty — no pending emails."
+    return (
+        f"Current inbox queue ({total} pending):\n"
+        f"- Trash: {summary.get('trash', 0)} emails\n"
+        f"- Archive: {summary.get('archive', 0)} emails\n"
+        f"- Keep: {summary.get('keep', 0)} emails\n"
+        f"- Draft needed: {summary.get('draft', 0)} emails"
+    )
+
+
 async def _calendar_context(db: AsyncSession) -> str:
     """Build a combined calendar block for all connected accounts.
 
@@ -565,6 +595,8 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
     except Exception:
         user_tz = "America/New_York"
 
+    inbox_context = await _inbox_context(db)
+
     system = claude_service.build_system_prompt(
         calendar_context=calendar_context,
         obsidian_context=obsidian_context,
@@ -575,6 +607,7 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
         allow_draft=draft_intent,
         self_email=self_email,
         user_tz=user_tz,
+        inbox_context=inbox_context,
     )
     if context_source != "none":
         system += f"\nContext source: {context_source}"
