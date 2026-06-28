@@ -23,7 +23,6 @@ from services import (
     calendar_service,
     claude_service,
     contact_service,
-    digest_service,
     draft_service,
     gmail_service,
     obsidian_service,
@@ -49,17 +48,6 @@ _DEEP_PHRASES = (
     "show me everything",
     "read the full",
 )
-
-# Phrases that mean "read me my daily brief" instead of a normal chat turn.
-_DIGEST_TRIGGERS = (
-    "digest",
-    "brief",
-    "morning brief",
-    "what's going on",
-    "whats going on",
-    "catch me up",
-)
-
 
 async def _get_context_tiered(
     message: str, db: AsyncSession, tier: int = 1
@@ -150,11 +138,6 @@ async def _get_context_tiered(
         logger.exception("Tier 2 retrieval failed")
 
     return obsidian_email_ctx or "", "obsidian"
-
-
-def _is_digest_request(message: str) -> bool:
-    text_lower = message.lower()
-    return any(trigger in text_lower for trigger in _DIGEST_TRIGGERS)
 
 
 # Only these explicit phrases should put Claude into email-drafting mode. A plain
@@ -544,20 +527,6 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
             reply = "Okay, I won't schedule it."
             await _persist_exchange(db, payload.message, reply, total=0)
             return ChatResponse(response=reply, tokens=TokenUsage(input=0, output=0, total=0))
-
-    # "Give me the digest" short-circuits normal chat: build the brief and return
-    # its voice-ready text so callers (voice/TTS) read it aloud.
-    if _is_digest_request(payload.message):
-        try:
-            digest = await digest_service.build_digest(db)
-            reply = digest["full_text"]
-        except Exception:  # noqa: BLE001
-            logger.exception("Digest request failed")
-            reply = "I couldn't put together your brief right now."
-        await _persist_exchange(db, payload.message, reply, total=0)
-        return ChatResponse(
-            response=reply, tokens=TokenUsage(input=0, output=0, total=0)
-        )
 
     try:
         accounts = await gmail_service.list_accounts(db)

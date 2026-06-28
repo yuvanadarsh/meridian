@@ -113,16 +113,6 @@ export interface Draft {
   updated_at: string
 }
 
-export interface Digest {
-  calendar: string
-  emails: string
-  news: string
-  stocks: string
-  full_text: string
-  cached: boolean
-  updated_at: string | null
-}
-
 export interface SuperchargeUpload {
   import_id: number
   provider: string
@@ -369,10 +359,6 @@ export const api = {
     request<Draft>(`/drafts/${draftId}/send`, { method: 'POST' }),
   discardDraft: (draftId: number) =>
     request<{ status: string; id: number }>(`/drafts/${draftId}`, { method: 'DELETE' }),
-
-  // Digest
-  getDigest: () => request<Digest>('/digest/today'),
-  refreshDigest: () => request<Digest>('/digest/refresh', { method: 'POST' }),
 
   // Threads
   buildThreads: (accountId: number) =>
