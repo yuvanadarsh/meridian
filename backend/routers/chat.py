@@ -405,6 +405,11 @@ async def _create_calendar_event(event: dict, db: AsyncSession) -> str:
     """Insert the event and return a friendly confirmation message."""
     global _pending_event
     try:
+        try:
+            tz_val = await settings_service.get_value(db, "timezone")
+            user_tz = tz_val or calendar_service.DEFAULT_TIMEZONE
+        except Exception:
+            user_tz = calendar_service.DEFAULT_TIMEZONE
         await calendar_service.create_event(
             account_id=event["account_id"],
             title=event["title"],
@@ -412,6 +417,7 @@ async def _create_calendar_event(event: dict, db: AsyncSession) -> str:
             end_time=event["end"],
             db=db,
             description=event.get("description", ""),
+            user_tz=user_tz,
         )
     except Exception:  # noqa: BLE001
         logger.exception("Calendar event creation from chat failed")
@@ -584,6 +590,12 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
             )
 
     tone = await settings_service.get_value(db, "response_tone")
+    try:
+        tz_val = await settings_service.get_value(db, "timezone")
+        user_tz = tz_val or "America/New_York"
+    except Exception:
+        user_tz = "America/New_York"
+
     system = claude_service.build_system_prompt(
         calendar_context=calendar_context,
         obsidian_context=obsidian_context,
@@ -593,6 +605,7 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
         tone=tone,
         allow_draft=draft_intent,
         self_email=self_email,
+        user_tz=user_tz,
     )
     if context_source != "none":
         system += f"\nContext source: {context_source}"
