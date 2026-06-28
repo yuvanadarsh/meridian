@@ -142,6 +142,25 @@ calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
   - Wikilink extraction filters stopwords and short tokens so vault graph edges
     stay meaningful
 
+## Features (UI Redesign)
+
+- **Sidebar navigation** — persistent left sidebar replaces the hamburger-menu modal,
+  giving every section its own page with React Router v6
+- **React Router** — proper page routing at `/`, `/analytics`, `/chat`, `/chat/:id`,
+  `/drafts`, `/review`, `/brief`, `/calendar`, `/contacts`, `/connections`, `/settings`
+- **Persistent chat** (`/chat`) — conversations that never get wiped; auto-generated
+  titles on first assistant reply; each thread is mirrored to `Chats/` in the Obsidian
+  vault as an append-only note; deleting a chat leaves the vault note intact
+- **Analytics page** — Recharts bar chart showing token usage and cost broken down by
+  provider (Anthropic, VoyageAI, ElevenLabs) across daily, weekly, monthly, and
+  yearly timeframes
+- **Calendar page** — read-only weekly view of synced events with links to Google
+  Calendar; prev/next week navigation
+- **Contacts page** — searchable, sortable list of all contacts with topic tags and
+  email counts
+- **Settings redesign** — full-width card layout for General, Voice, AI Providers,
+  Memory & Embeddings, and Scheduled Tasks sections
+
 ---
 
 ## Prerequisites
@@ -198,6 +217,7 @@ calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
    psql -U your_user -d meridian -f backend/db/migrations/017_afternoon_reviews.sql
    psql -U your_user -d meridian -f backend/db/migrations/018_usage_log.sql
    psql -U your_user -d meridian -f backend/db/migrations/019_oauth_state.sql
+   psql -U your_user -d meridian -f backend/db/migrations/020_persistent_chats.sql
    ```
 
 3. (Optional) Point Meridian at your Obsidian vault for the memory layer by
@@ -217,7 +237,7 @@ calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
 5. Open http://localhost:5173 in **Chrome** — push-to-talk voice relies on the
    Web Speech API, which other browsers don't fully support.
 
-6. Connect your Gmail account via the Connections panel (hamburger menu), which
+6. Connect your Gmail account via the Connections page (sidebar navigation), which
    drops you straight into the onboarding flow. You can also connect from the CLI:
 
    ```bash
@@ -256,33 +276,68 @@ OAuth tokens are stored in the database after first authentication, never in `.e
 
 ## Architecture
 
-- **Frontend:** React + Vite + TypeScript + Tailwind + Framer Motion
-- **Backend:** FastAPI (Python), async SQLAlchemy
-- **Database:** PostgreSQL + pgvector (runs on the host, not containerized)
-- **AI:** Claude (`claude-sonnet-4-6`) by default for reasoning, with a pluggable
-  provider layer (OpenAI / Gemini / DeepSeek / Ollama over OpenAI-compatible
-  endpoints); VoyageAI for embeddings (configurable); ElevenLabs for TTS
+- **Frontend:** React + Vite + TypeScript + Tailwind + Framer Motion; sidebar
+  navigation with React Router v6 across 11 pages
+- **Backend:** FastAPI (Python), async SQLAlchemy, 14 routers
+- **Database:** PostgreSQL + pgvector (runs on the host, not containerized);
+  19 tables spanning email, calendar, chat, memory, tasks, and cost tracking
+- **AI:** Claude (`claude-sonnet-4-6` for reasoning/drafting, `claude-haiku-4-5`
+  for batch classification) by default, with a pluggable provider layer (OpenAI /
+  Gemini / DeepSeek / Ollama over OpenAI-compatible endpoints); API keys stored
+  encrypted in the database; VoyageAI for embeddings (configurable model and
+  dimension); ElevenLabs for TTS
 - **Memory:** unified Obsidian vault — email threads and contacts are exported as
   linked `.md` notes, daily conversation notes are appended after each exchange,
-  and the entire vault is ingested into pgvector via a background watcher.
-  Retrieval is tiered: Obsidian note search → live Gmail API fetch → raw thread embeddings
-- **Retrieval:** thread-aware hybrid search (pgvector + Postgres full-text fused
-  with Reciprocal Rank Fusion) with name-aware participant lookup and a
-  relevance threshold before any live Gmail fetch
+  persistent chats are mirrored to `Chats/`, and the entire vault is ingested into
+  pgvector via a background watcher. Retrieval is tiered: Obsidian note search →
+  live Gmail API thread fetch → raw email thread embeddings
+- **Retrieval:** thread-aware hybrid search (pgvector cosine similarity fused with
+  Postgres full-text BM25 via Reciprocal Rank Fusion) with name-aware participant
+  lookup and a relevance threshold before any live Gmail fetch
+- **Scheduled tasks:** a generic scheduler reads a `scheduled_tasks` DB table once
+  per minute; four registered tasks — email poll (15-min interval), morning brief,
+  afternoon review, and calendar sync — are configurable from the Settings panel
 
 Only the `api` and `frontend` services run in Docker; the API container reaches
 your host PostgreSQL via `host.docker.internal`.
 
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full system architecture
+diagram and pipeline descriptions.
+
 ## Roadmap
 
-- [x] Calendar conflict detection (Phase 5B)
-- [x] Scheduled background tasks with a configurable scheduler (Phase 5B)
-- [ ] Email send from Drafts panel via Gmail API
+Done:
+
+- [x] Email threading and hybrid search (Phase 4)
+- [x] Contact intelligence graph (Phase 4)
+- [x] Multi-provider AI keys with per-task model selection (Phase 4)
+- [x] Configurable embeddings with live re-vectorize (Phase 4)
+- [x] Supercharge import — parse Claude/ChatGPT/Gemini exports into Obsidian (Phase 4)
+- [x] Scheduled digest pre-built in user timezone (Phase 4)
+- [x] Unified Obsidian memory — emails and contacts exported as linked `.md` notes (Phase 5A)
+- [x] Tiered RAG retrieval (Obsidian → Gmail API → raw vectors) (Phase 5A)
+- [x] Scheduled background tasks with configurable scheduler (Phase 5B)
+- [x] Gmail polling every 15 minutes across all accounts (Phase 5B)
+- [x] Afternoon email review with user-approval before any Gmail mutation (Phase 5B)
+- [x] Calendar conflict detection before event creation (Phase 5B)
+- [x] Provider-aware cost tracking logged per API call (Phase 5B)
+- [x] Sidebar navigation and full React Router page routing (UI Redesign)
+- [x] Persistent chat with Obsidian mirroring (UI Redesign)
+- [x] Analytics page with cost/token breakdown by provider (UI Redesign)
+- [x] Calendar weekly view page (UI Redesign)
+- [x] Contacts page with search and topic tags (UI Redesign)
+
+Coming next:
+
+- [ ] Calendar event deletion from chat and the calendar page
+- [ ] Email send from the Drafts panel via Gmail API
 - [ ] Connect multiple Gmail accounts through the existing onboarding UI
 - [ ] Setup wizard for first-time users
 - [ ] Docker Hub image for one-command install
 - [ ] Always-on wake word (currently push-to-talk only)
 - [ ] Slack integration
+- [ ] In-app Obsidian graph viewer
+- [ ] Agent orchestration and MCP integration
 
 ## Contributing
 
