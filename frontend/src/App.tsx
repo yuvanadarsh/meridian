@@ -5,15 +5,15 @@ import { api } from './api/client'
 import Onboarding from './components/Onboarding/Onboarding'
 import { Sidebar } from './components/Sidebar/Sidebar'
 import { AnalyticsPage } from './pages/AnalyticsPage'
-import { BriefPage } from './pages/BriefPage'
 import { CalendarPage } from './pages/CalendarPage'
 import { ChatDetailPage } from './pages/ChatDetailPage'
 import { ChatPage } from './pages/ChatPage'
 import { ConnectionsPage } from './pages/ConnectionsPage'
 import { ContactsPage } from './pages/ContactsPage'
+import { DraftDetailPage } from './pages/DraftDetailPage'
 import { DraftsPage } from './pages/DraftsPage'
 import { HomePage } from './pages/HomePage'
-import { ReviewPage } from './pages/ReviewPage'
+import { InboxPage } from './pages/InboxPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { useMeridianStore } from './store/meridianStore'
 
@@ -104,8 +104,8 @@ function App() {
           <Route path="/chat" element={<ChatPage />} />
           <Route path="/chat/:id" element={<ChatDetailPage />} />
           <Route path="/drafts" element={<DraftsPage />} />
-          <Route path="/review" element={<ReviewPage />} />
-          <Route path="/brief" element={<BriefPage />} />
+          <Route path="/drafts/:id" element={<DraftDetailPage />} />
+          <Route path="/inbox" element={<InboxPage />} />
           <Route path="/contacts" element={<ContactsPage />} />
           <Route path="/calendar" element={<CalendarPage />} />
           <Route path="/connections" element={<ConnectionsPage />} />
