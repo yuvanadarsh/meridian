@@ -103,35 +103,24 @@ flowchart LR
 ```mermaid
 flowchart LR
     Scheduler["run_task_scheduler\nmain.py · wakes every 60s\nreads scheduled_tasks table"]
-    EmailPoll["email_poll\nevery 15 min · no AI calls"]
-    MBTask["morning_brief\n08:00 local time"]
-    ARTask["afternoon_review\n17:00 local time"]
+    EmailPoll["email_poll\nevery 15 min · fetch + triage"]
     CSTask["calendar_sync\n07:00 local time"]
     GmailSvc["gmail_service"]
     GmailAPI["Gmail API"]
-    DigestSvc["digest_service\ncalendar + email + news + stocks"]
+    TriageSvc["triage_service\n4-category classify"]
     ProvSvc["provider_service"]
     CalAPI["Google Calendar API"]
-    TriageSvc["triage_service"]
-    DraftSvc["draft_service"]
-    DB[("afternoon_reviews\ndigest_cache\ncalendar_events")]
+    DB[("email_queue\ncalendar_events")]
 
     Scheduler -->|"every 15 min"| EmailPoll
-    Scheduler -->|"08:00"| MBTask
-    Scheduler -->|"17:00"| ARTask
     Scheduler -->|"07:00"| CSTask
     EmailPoll --> GmailSvc
     GmailSvc --> GmailAPI
-    MBTask --> DigestSvc
-    DigestSvc --> ProvSvc
-    DigestSvc --> DB
+    EmailPoll --> TriageSvc
+    TriageSvc --> ProvSvc
+    EmailPoll -->|"insert classified mail"| DB
     CSTask -->|"events.list"| CalAPI
     CSTask --> DB
-    ARTask --> TriageSvc
-    ARTask --> DraftSvc
-    TriageSvc --> ProvSvc
-    DraftSvc --> ProvSvc
-    ARTask --> DB
 ```
 
 ### Pipeline 4 — Obsidian Memory
@@ -208,16 +197,15 @@ emails via VoyageAI; `thread_service` groups them into `email_threads` rows; and
 ### Pipeline 3 — Scheduled Tasks
 
 A generic scheduler (`run_task_scheduler` in `main.py`) wakes every 60 seconds and
-reads the `scheduled_tasks` table. Email poll runs on a fixed 15-minute interval and
-makes no AI calls — it stores new messages as `pending` for the afternoon review.
-The three clock-based tasks (morning brief, afternoon review, calendar sync) fire
-when the user's local time matches their configured `schedule_time` and they have not
-already run today (checked against the user's local date, not UTC). The afternoon
-review task triages the day's pending emails with Claude Haiku, queues draft replies
-where a response seems expected, and writes the results to `afternoon_reviews`; the
-user approves in the Daily Review panel before anything is sent. Task run status and
-summaries are written back to the `scheduled_tasks` row so the Settings UI can show
-when each task last ran.
+reads the `scheduled_tasks` table. Email poll runs on a fixed 15-minute interval: it
+fetches new mail via `gmail_service`, then immediately classifies each message with
+`triage_service` into one of `trash`/`archive`/`keep`/`draft` and inserts a row into
+`email_queue` (continuous triage on arrival). The clock-based `calendar_sync` task
+fires when the user's local time matches its configured `schedule_time` and it has not
+already run today (checked against the user's local date, not UTC). Nothing is applied
+to Gmail by the scheduler — the queue accumulates until the user approves it on the
+Inbox page. Task run status and summaries are written back to the `scheduled_tasks`
+row so the Settings UI can show when each task last ran.
 
 ### Pipeline 4 — Obsidian Memory
 

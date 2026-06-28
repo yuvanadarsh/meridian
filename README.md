@@ -59,7 +59,7 @@ calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
 - **Daily brief** — calendar, email, news, and stock watchlist, cached in the
   database and served instantly on open (refresh forces a rebuild)
 - **Calendar writes** — Claude can create events via an action-token protocol
-- **Settings** — response tone, agent name, digest time, timezone, voice toggle
+- **Settings** — response tone, agent name, timezone, voice toggle
 
 ## Features (Phase 4 — Memory, Intelligence, and Scale)
 
@@ -147,7 +147,7 @@ calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
 - **Sidebar navigation** — persistent left sidebar replaces the hamburger-menu modal,
   giving every section its own page with React Router v6
 - **React Router** — proper page routing at `/`, `/analytics`, `/chat`, `/chat/:id`,
-  `/drafts`, `/review`, `/brief`, `/calendar`, `/contacts`, `/connections`, `/settings`
+  `/drafts`, `/drafts/:id`, `/inbox`, `/calendar`, `/contacts`, `/connections`, `/settings`
 - **Persistent chat** (`/chat`) — conversations that never get wiped; auto-generated
   titles on first assistant reply; each thread is mirrored to `Chats/` in the Obsidian
   vault as an append-only note; deleting a chat leaves the vault note intact
@@ -160,6 +160,26 @@ calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
   email counts
 - **Settings redesign** — full-width card layout for General, Voice, AI Providers,
   Memory & Embeddings, and Scheduled Tasks sections
+
+## Features (Inbox Redesign)
+
+This phase simplifies the email pipeline and removes the daily brief.
+
+- **Continuous triage** — the 15-minute email poll now classifies each new
+  message on arrival into one of `trash` / `archive` / `keep` / `draft` and adds
+  it to a persistent `email_queue`, instead of a once-a-day batch review
+- **Inbox page** (`/inbox`) — a live queue grouped by category, updated every 15
+  minutes (or on demand with "Run triage now"). Reclassify any email inline,
+  dismiss, or **Apply & approve all** to push trash/archive to Gmail in one go —
+  the single point where the inbox mutates Gmail
+- **Approve & Generate Draft** — `draft`-classified mail gets a reply drafted on
+  demand in your voice; a spinner shows progress, then a link to the draft
+- **Draft detail page** (`/drafts/:id`) — edit a draft inline and send it;
+  sending records the sent email to the Obsidian `Sent/` folder
+- **Inbox-aware chat** — "what emails are pending?" is answered directly from the
+  queue with no extra tool call
+- **Removed** — the daily brief (news, stocks, world events), the morning brief
+  and afternoon review scheduled tasks, the Brief page, and the Daily Review panel
 
 ---
 
@@ -218,6 +238,7 @@ calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
    psql -U your_user -d meridian -f backend/db/migrations/018_usage_log.sql
    psql -U your_user -d meridian -f backend/db/migrations/019_oauth_state.sql
    psql -U your_user -d meridian -f backend/db/migrations/020_persistent_chats.sql
+   psql -U your_user -d meridian -f backend/db/migrations/021_email_queue.sql
    ```
 
 3. (Optional) Point Meridian at your Obsidian vault for the memory layer by
@@ -295,8 +316,8 @@ OAuth tokens are stored in the database after first authentication, never in `.e
   Postgres full-text BM25 via Reciprocal Rank Fusion) with name-aware participant
   lookup and a relevance threshold before any live Gmail fetch
 - **Scheduled tasks:** a generic scheduler reads a `scheduled_tasks` DB table once
-  per minute; four registered tasks — email poll (15-min interval), morning brief,
-  afternoon review, and calendar sync — are configurable from the Settings panel
+  per minute; two registered tasks — email poll (15-min interval, triages new mail
+  on arrival) and calendar sync — are configurable from the Settings panel
 
 Only the `api` and `frontend` services run in Docker; the API container reaches
 your host PostgreSQL via `host.docker.internal`.
@@ -326,11 +347,13 @@ Done:
 - [x] Analytics page with cost/token breakdown by provider (UI Redesign)
 - [x] Calendar weekly view page (UI Redesign)
 - [x] Contacts page with search and topic tags (UI Redesign)
+- [x] Continuous triage into a persistent inbox queue (Inbox Redesign)
+- [x] Inbox page with approve and on-demand draft generation (Inbox Redesign)
+- [x] Draft detail page — edit and send, with send-then-embed to Obsidian (Inbox Redesign)
 
 Coming next:
 
 - [ ] Calendar event deletion from chat and the calendar page
-- [ ] Email send from the Drafts panel via Gmail API
 - [ ] Connect multiple Gmail accounts through the existing onboarding UI
 - [ ] Setup wizard for first-time users
 - [ ] Docker Hub image for one-command install
