@@ -28,6 +28,7 @@ from routers import (
     drafts,
     gmail,
     health,
+    inbox,
     persistent_chats,
     settings as settings_router,
     supercharge,
@@ -191,6 +192,7 @@ app.include_router(calendar.router)
 app.include_router(chat.router)
 app.include_router(persistent_chats.router)
 app.include_router(voice.router)
+app.include_router(inbox.router)
 app.include_router(drafts.router)
 app.include_router(settings_router.router)
 app.include_router(supercharge.router)
