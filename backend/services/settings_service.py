@@ -10,7 +10,6 @@ logger = logging.getLogger(__name__)
 # Fallbacks used when a key is missing (e.g. migration not yet run).
 DEFAULTS = {
     "response_tone": "concise",
-    "digest_schedule": "08:00",
     "voice_enabled": "true",
     "agent_name": "Meridian",
     "triage_mode": "normal",

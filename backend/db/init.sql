@@ -184,7 +184,6 @@ CREATE TABLE IF NOT EXISTS user_settings (
 
 INSERT INTO user_settings (key, value) VALUES
     ('response_tone',   'concise'),
-    ('digest_schedule', '08:00'),
     ('voice_enabled',   'true'),
     ('agent_name',      'Meridian'),
     ('timezone',        'America/New_York'),
