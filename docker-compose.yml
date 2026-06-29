@@ -20,10 +20,6 @@ services:
     volumes:
       # Mount source for hot reload (uvicorn --reload).
       - ./backend:/app
-      # Mount the host Obsidian vault at the same absolute path so daily-note
-      # writes and RAG reads go to the real vault on disk, not inside the container.
-      # OBSIDIAN_VAULT_PATH must be an absolute path; Docker Compose expands it from .env.
-      - ${OBSIDIAN_VAULT_PATH}:${OBSIDIAN_VAULT_PATH}:rw
     extra_hosts:
       - "host.docker.internal:host-gateway"
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload

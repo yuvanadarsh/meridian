@@ -1,6 +1,6 @@
 # Meridian
 
-> A local-first personal AI operating system — voice-enabled, email-aware, and wired into your Obsidian vault.
+> A local-first personal AI operating system — voice-enabled, email-aware, with a PostgreSQL memory layer.
 
 ![Meridian Dashboard](images/dashboard.png)
 
@@ -9,7 +9,7 @@ calendars, and daily information — and lets you interact with all of it throug
 a voice-enabled animated interface. All data is stored locally; the only outbound
 calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
 
-![Obsidian Knowledge Graph](images/graph.png)
+![Knowledge Graph](images/graph.png)
 
 ---
 
@@ -44,9 +44,9 @@ calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
   - Keep + Archive emails are embedded with VoyageAI right after approval
 - **Unlimited accounts** — add and remove any number of Google accounts; no fixed
   role slots
-- **Obsidian memory layer** — conversations are written to daily notes with
-  auto-extracted `[[wikilinks]]`, the vault is ingested into PostgreSQL, and
-  relevant notes are retrieved (RAG) into the chat context
+- **PostgreSQL memory layer** — conversations, email/contact summaries, and sent
+  mail are written directly to the `notes` table and embedded on write, then
+  retrieved (RAG) into the chat context
 - Fixes: the assistant knows the calendar is read-only (no hallucinated
   scheduling), the `?connected=` OAuth param is stripped after sign-in, and chat
   history survives a refresh
@@ -75,7 +75,7 @@ calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
 - **Configurable embeddings** — pick the embedding model in Settings and
   re-embed all data (columns auto-resize when the dimension changes)
 - **Supercharge import** — upload a Claude / ChatGPT / Gemini conversation export
-  to parse it into your Obsidian vault and vectorize it into memory
+  to parse it into the memory layer and vectorize it for RAG
 - **Scheduled digest** — pre-builds at your set time in your timezone so the
   Brief loads instantly in the morning
 - **Brief as a centered modal**, and a **triage mode** setting (aggressive /
@@ -84,22 +84,22 @@ calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
 
 ## Features (Phase 5A — Unified Memory)
 
-- **Obsidian as the knowledge layer** — email threads and contacts are exported
-  to your Obsidian vault as fully linked `.md` notes, making Obsidian the single
-  source of truth for long-term memory rather than a parallel system
-  - `Emails/{Contact}/` — one note per thread with an AI-generated summary,
-    the 5 most recent messages, and `[[wikilinks]]` to contacts and topics
-  - `Contacts/` — one note per contact with email count, relationship history,
-    topics, and links back to their threads
+- **PostgreSQL as the knowledge layer** — email threads and contacts are written
+  to the `notes` table as embedded notes, making PostgreSQL the single source of
+  truth for long-term memory (a `/graph` page to browse it is coming soon)
+  - `email` notes — one per thread with an AI-generated summary and participants,
+    linked back to `email_threads` via `source_id`
+  - `contact` notes — one per contact with email count and topics, linked back to
+    `contacts` via `source_id`
   - Export triggers automatically after triage approval for new accounts; existing
-    accounts have a manual "Export to Obsidian" button in the Connections panel
+    accounts have a manual "Export" button in the Connections panel
 - **Tiered retrieval pipeline** — chat context is assembled in order of richness:
-  1. **Tier 1** — semantic search over Obsidian note embeddings (fast, wikilink-rich)
+  1. **Tier 1** — semantic search over `email`/`contact` note embeddings
   2. **Tier 2** — triggered by follow-up phrases ("tell me more", "full details");
      searches by participant name first, then vector similarity, then fetches the
-     complete thread live from the Gmail API, enriches the Obsidian note, and
+     complete thread live from the Gmail API, writes an enriched note to memory, and
      injects the full message bodies into the Claude context in the same request
-  3. **Fallback** — raw email thread embeddings if Obsidian has no relevant notes yet
+  3. **Fallback** — raw email thread embeddings if memory has no relevant notes yet
 - **Name-aware thread lookup** — extracts person names from queries and searches
   `email_threads.participants` directly before falling back to vector similarity,
   so "what did Alex email me about?" reliably finds Alex's threads
@@ -127,7 +127,7 @@ calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
   applied to Gmail until you approve
 - **Daily Review panel** — a newspaper-style digest grouped into Action Required,
   FYI, and Cleaned Up. Approve all pushes triage to Gmail and saves summaries to
-  Obsidian; Dismiss takes no action
+  the memory layer; Dismiss takes no action
 - **Calendar conflict detection** — creating an event from chat checks for
   overlapping events first and asks you to confirm before scheduling over them
 - **Event suggestions from email** — emails that read like a meeting proposal get
@@ -139,8 +139,6 @@ calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
   - Contacts panel now loads up to 500 contacts (was 200)
   - Calendar event times are converted to the user's configured timezone before
     being injected into Claude's context (were shown as raw UTC)
-  - Wikilink extraction filters stopwords and short tokens so vault graph edges
-    stay meaningful
 
 ## Features (UI Redesign)
 
@@ -149,8 +147,8 @@ calls are to Claude, VoyageAI, ElevenLabs, and Google APIs.
 - **React Router** — proper page routing at `/`, `/analytics`, `/chat`, `/chat/:id`,
   `/drafts`, `/drafts/:id`, `/inbox`, `/calendar`, `/contacts`, `/connections`, `/settings`
 - **Persistent chat** (`/chat`) — conversations that never get wiped; auto-generated
-  titles on first assistant reply; each thread is mirrored to `Chats/` in the Obsidian
-  vault as an append-only note; deleting a chat leaves the vault note intact
+  titles on first assistant reply; each thread is mirrored to a `Chats/` note in the
+  memory layer as an append-only note; deleting a chat leaves the memory note intact
 - **Analytics page** — Recharts bar chart showing token usage and cost broken down by
   provider (Anthropic, VoyageAI, ElevenLabs) across daily, weekly, monthly, and
   yearly timeframes
@@ -175,7 +173,7 @@ This phase simplifies the email pipeline and removes the daily brief.
 - **Approve & Generate Draft** — `draft`-classified mail gets a reply drafted on
   demand in your voice; a spinner shows progress, then a link to the draft
 - **Draft detail page** (`/drafts/:id`) — edit a draft inline and send it;
-  sending records the sent email to the Obsidian `Sent/` folder
+  sending records the sent email as a `sent` note in the memory layer
 - **Inbox-aware chat** — "what emails are pending?" is answered directly from the
   queue with no extra tool call
 - **Removed** — the daily brief (news, stocks, world events), the morning brief
@@ -239,26 +237,23 @@ This phase simplifies the email pipeline and removes the daily brief.
    psql -U your_user -d meridian -f backend/db/migrations/019_oauth_state.sql
    psql -U your_user -d meridian -f backend/db/migrations/020_persistent_chats.sql
    psql -U your_user -d meridian -f backend/db/migrations/021_email_queue.sql
+   psql -U your_user -d meridian -f backend/db/migrations/022_notes_table.sql
    ```
 
-3. (Optional) Point Meridian at your Obsidian vault for the memory layer by
-   setting `OBSIDIAN_VAULT_PATH` in `.env` to the vault's **absolute path**
-   (e.g. `/Users/you/Documents/MyVault`). Docker Compose mounts this path
-   directly into the API container so daily-note writes and RAG reads go to
-   your real vault on disk — a relative path will silently write inside the
-   container instead. When unset, the daily-note writer and RAG retrieval
-   simply no-op.
+   Migration `022` renames `obsidian_notes` to `notes` and adds the `note_type`,
+   `source_id`, and `wikilinks` columns. Existing rows and embeddings are
+   preserved — the table is renamed, not dropped.
 
-4. Start Meridian:
+3. Start Meridian:
 
    ```bash
    docker compose up --build
    ```
 
-5. Open http://localhost:5173 in **Chrome** — push-to-talk voice relies on the
+4. Open http://localhost:5173 in **Chrome** — push-to-talk voice relies on the
    Web Speech API, which other browsers don't fully support.
 
-6. Connect your Gmail account via the Connections page (sidebar navigation), which
+5. Connect your Gmail account via the Connections page (sidebar navigation), which
    drops you straight into the onboarding flow. You can also connect from the CLI:
 
    ```bash
@@ -307,10 +302,10 @@ OAuth tokens are stored in the database after first authentication, never in `.e
   Gemini / DeepSeek / Ollama over OpenAI-compatible endpoints); API keys stored
   encrypted in the database; VoyageAI for embeddings (configurable model and
   dimension); ElevenLabs for TTS
-- **Memory:** unified Obsidian vault — email threads and contacts are exported as
-  linked `.md` notes, daily conversation notes are appended after each exchange,
-  persistent chats are mirrored to `Chats/`, and the entire vault is ingested into
-  pgvector via a background watcher. Retrieval is tiered: Obsidian note search →
+- **Memory:** a PostgreSQL `notes` table — email threads and contacts are written
+  as embedded notes, daily conversation notes are appended after each exchange, and
+  persistent chats are mirrored to `Chats/` notes. Notes are embedded on write (no
+  filesystem vault, no background watcher). Retrieval is tiered: memory note search →
   live Gmail API thread fetch → raw email thread embeddings
 - **Retrieval:** thread-aware hybrid search (pgvector cosine similarity fused with
   Postgres full-text BM25 via Reciprocal Rank Fusion) with name-aware participant
@@ -333,23 +328,24 @@ Done:
 - [x] Contact intelligence graph (Phase 4)
 - [x] Multi-provider AI keys with per-task model selection (Phase 4)
 - [x] Configurable embeddings with live re-vectorize (Phase 4)
-- [x] Supercharge import — parse Claude/ChatGPT/Gemini exports into Obsidian (Phase 4)
+- [x] Supercharge import — parse Claude/ChatGPT/Gemini exports into the memory layer (Phase 4)
 - [x] Scheduled digest pre-built in user timezone (Phase 4)
-- [x] Unified Obsidian memory — emails and contacts exported as linked `.md` notes (Phase 5A)
-- [x] Tiered RAG retrieval (Obsidian → Gmail API → raw vectors) (Phase 5A)
+- [x] Unified memory — emails and contacts written as embedded notes (Phase 5A)
+- [x] Tiered RAG retrieval (memory notes → Gmail API → raw vectors) (Phase 5A)
 - [x] Scheduled background tasks with configurable scheduler (Phase 5B)
 - [x] Gmail polling every 15 minutes across all accounts (Phase 5B)
 - [x] Afternoon email review with user-approval before any Gmail mutation (Phase 5B)
 - [x] Calendar conflict detection before event creation (Phase 5B)
 - [x] Provider-aware cost tracking logged per API call (Phase 5B)
 - [x] Sidebar navigation and full React Router page routing (UI Redesign)
-- [x] Persistent chat with Obsidian mirroring (UI Redesign)
+- [x] Persistent chat mirrored to the memory layer (UI Redesign)
 - [x] Analytics page with cost/token breakdown by provider (UI Redesign)
 - [x] Calendar weekly view page (UI Redesign)
 - [x] Contacts page with search and topic tags (UI Redesign)
 - [x] Continuous triage into a persistent inbox queue (Inbox Redesign)
 - [x] Inbox page with approve and on-demand draft generation (Inbox Redesign)
-- [x] Draft detail page — edit and send, with send-then-embed to Obsidian (Inbox Redesign)
+- [x] Draft detail page — edit and send, with send-then-record to memory (Inbox Redesign)
+- [x] Obsidian removed — notes stored directly in PostgreSQL and embedded on write (v2)
 
 Coming next:
 
@@ -359,7 +355,8 @@ Coming next:
 - [ ] Docker Hub image for one-command install
 - [ ] Always-on wake word (currently push-to-talk only)
 - [ ] Slack integration
-- [ ] In-app Obsidian graph viewer
+- [ ] In-app knowledge graph viewer (`/graph` page over the `notes` table)
+- [ ] One-time export of notes to an Obsidian vault (`export_to_obsidian` stub)
 - [ ] Agent orchestration and MCP integration
 
 ## Contributing

@@ -13,33 +13,32 @@ Meridian is a local personal AI OS. It manages multiple Gmail accounts and Googl
 
 ## Memory Architecture
 
-Meridian uses a unified memory model:
+Meridian stores all memory in PostgreSQL. (Obsidian was removed in v2 — there is
+no filesystem vault and no vault watcher. `memory_service` writes notes directly
+to the `notes` table and embeds them immediately.)
 
-**OBSIDIAN VAULT (knowledge layer)**
-- `Daily/YYYY-MM-DD.md` — conversation logs, written after every chat exchange
-- `Emails/{Contact}/{Subject}.md` — email thread notes with AI summaries and wikilinks
-- `Contacts/{Name}.md` — contact profiles with relationship history and topic links
-- `AI Conversations/` — Supercharge imports
-
-**POSTGRESQL (operations layer)**
+**POSTGRESQL (single source of truth)**
 - `emails`, `email_threads`, `contacts` tables — raw data and metadata
-- `obsidian_notes` table — vault file index with pgvector embeddings (512 dims, voyage-3-lite)
+- `notes` table — the memory layer (formerly `obsidian_notes`): `title`, `content`,
+  `note_type` (`email`/`contact`/`chat`/`persistent_chat`/`sent`/`daily`/`general`),
+  `source_id` (links back to the originating record), `wikilinks`, and a pgvector
+  embedding (512 dims, voyage-3-lite). Written directly by `memory_service`.
 - `gmail_accounts`, `calendar_events`, `drafts`, `user_settings` — operational state
 - `email_queue` — persistent inbox queue from continuous triage (one row per email, classification + on-demand draft link), accumulates until the user approves on the Inbox page
-- All vector embeddings for RAG are generated FROM Obsidian note content
+- Notes are embedded synchronously on write; if embedding fails the note is still
+  stored with a NULL embedding and a warning is logged
 
-**RETRIEVAL PIPELINE (tiered)**
-1. Search `obsidian_notes` WHERE `file_path LIKE 'Emails/%' OR 'Contacts/%'` (AI-summarized, wikilinked)
-2. Fall back to raw `email_threads` vector search if Obsidian has nothing relevant
-3. Tier 2 (triggered by "tell me more" / "go deeper" / "full details"): fetch complete thread from Gmail API, write enriched note to Obsidian, return full content
+**RETRIEVAL PIPELINE (tiered)** — `memory_service`
+1. `search_notes` over the `notes` table filtered to `note_type IN ('email','contact')` (AI-summarized)
+2. Fall back to raw `email_threads` vector search if the memory layer has nothing relevant
+3. Tier 2 (triggered by "tell me more" / "go deeper" / "full details"): fetch complete thread from Gmail API, write an enriched note to the `notes` table, return full content
 
 **INGEST PIPELINE (per new account)**
 1. Sweep emails → PostgreSQL `emails` table
 2. Triage → user approves in UI
 3. Vectorize keep/archive emails → pgvector embeddings on `emails`
 4. Build threads → `email_threads` table populated
-5. Export to Obsidian → `Emails/` and `Contacts/` notes written
-6. Vault watcher ingests new notes → `obsidian_notes` table populated + vectorized
+5. Export to memory → `memory_service.export_threads_to_memory` / `export_contacts_to_memory` write `email`/`contact` notes (embedded on write)
 
 **This is an open source project. Code must be clean, well-commented, and readable by strangers on GitHub. No personal details, usernames, local paths, or machine-specific references anywhere in the codebase.**
 
@@ -72,7 +71,6 @@ Meridian uses a unified memory model:
 - **Docker Compose** runs: `api` (FastAPI) and `frontend` (Vite dev server) only
 - **PostgreSQL** runs locally on the host machine (default port 5432)
 - The API container connects to the host DB via `host.docker.internal:5432`
-- **Obsidian vault** path configured via `OBSIDIAN_VAULT_PATH` env var — never hardcoded
 - All secrets in `.env` — never committed, never hardcoded
 
 ---
@@ -105,6 +103,7 @@ meridian/
 │   │   ├── claude_service.py
 │   │   ├── elevenlabs_service.py   # TTS is currently handled inline in voice.py; this file is planned but not yet created
 │   │   ├── vector_service.py     # VoyageAI + pgvector
+│   │   ├── memory_service.py     # PostgreSQL memory layer: write + embed notes, RAG retrieval
 │   │   └── triage_service.py     # Email triage classification
 │   ├── models/
 │   │   ├── email.py
@@ -178,8 +177,7 @@ GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
 # OAuth tokens are stored in the database after first auth — not in .env
 
-# Obsidian
-OBSIDIAN_VAULT_PATH=           # absolute path to vault on this machine
+# Note: Obsidian integration removed in v2. Notes are stored in PostgreSQL.
 
 # App
 FRONTEND_URL=http://localhost:5173
@@ -498,12 +496,13 @@ docs(readme): add setup, oauth, and local development instructions
 | **2 — All accounts**         | Repeat onboarding for accounts 2–4                                                          |
 | **3 — Intelligence**         | Email drafting in user's voice, news digest, stock watchlist, web search                    |
 | **4 — Memory & intelligence**| Threading, hybrid search, contacts graph, multi-provider AI, scheduled digest               |
-| **5A — Memory unification**  | Email threads + contacts written to Obsidian; tiered RAG with Obsidian-first retrieval      |
+| **5A — Memory unification**  | Email threads + contacts written to the memory layer; tiered RAG with memory-first retrieval |
 | **5B — Scheduling & review** | Task registry + dynamic scheduler, 15-min Gmail polling, calendar conflict detection, email-driven event suggestions |
 | **5C — Always-on voice**     | Wake word detection (future)                                                                |
-| **5D — Inbox redesign**      | Daily brief removed; continuous triage on arrival into a persistent `email_queue` (trash/archive/keep/draft); Inbox page with approve & on-demand draft generation; send-then-embed to Obsidian |
+| **5D — Inbox redesign**      | Daily brief removed; continuous triage on arrival into a persistent `email_queue` (trash/archive/keep/draft); Inbox page with approve & on-demand draft generation; send-then-record to memory |
+| **v2 — Memory in Postgres**  | Obsidian removed; `memory_service` writes notes directly to the `notes` table and embeds on write (no vault, no watcher) |
 
-**Current phase: 5D complete**
+**Current phase: v2 (PostgreSQL memory layer) complete**
 
 ### Task registry (Phase 5B+)
 
@@ -523,9 +522,21 @@ of `trash`/`archive`/`keep`/`draft`, inserting a row into `email_queue`. The
 queue accumulates until the user approves it on the Inbox page — the ONLY point
 where Gmail is mutated (trash/archive). `draft`-classified mail can have a reply
 generated on demand ("Approve & Generate Draft"); sending a draft records the
-sent email to the Obsidian `Sent/` folder. Triage classification never auto-
-applies to Gmail. The initial onboarding sweep keeps its own 3-category triage
-review path, separate from this continuous queue.
+sent email as a `sent` note in the memory layer. Triage classification never
+auto-applies to Gmail. The initial onboarding sweep keeps its own 3-category
+triage review path, separate from this continuous queue.
+
+### Memory layer (v2)
+
+`memory_service` is the single memory API. `write_note(title, content,
+note_type, source_id, wikilinks, db)` upserts a note by title (appending on a
+title collision) and embeds it immediately via the configured embedding model;
+on embed failure the note is stored with a NULL embedding. Typed helpers
+(`write_daily_note`, `write_email_note`, `write_contact_note`,
+`write_persistent_chat_note`, `write_sent_email_note`) and retrieval
+(`search_notes`, `get_email_context`, `get_general_context`) live here.
+`export_to_obsidian()` is a stub (`NotImplementedError`) reserved for a future
+one-time vault export.
 
 ---
 

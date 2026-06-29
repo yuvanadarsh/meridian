@@ -438,7 +438,7 @@ async def vectorize_progress(account_id: int, db: AsyncSession) -> dict:
 # ---------------------------------------------------------------------------
 
 # Tables whose vector() columns are resized + reset when the dimension changes.
-_EMBEDDED_TABLES = ("emails", "email_threads", "obsidian_notes", "contacts")
+_EMBEDDED_TABLES = ("emails", "email_threads", "notes", "contacts")
 
 # Simple in-process status for the revectorize background task.
 _revectorize_state = {"status": "idle", "model": EMBED_MODEL}
@@ -496,6 +496,53 @@ async def revectorize(model: str, db: AsyncSession) -> dict:
     return {"queued": True}
 
 
+async def revectorize_notes(db: AsyncSession, batch: int = 128) -> int:
+    """Embed one batch of not-yet-vectorized memory notes. Returns count embedded."""
+    config = await get_embedding_config(db)
+    expected_dim = config["dim"]
+    if config["provider"] == "voyage" and not settings.voyage_api_key:
+        return 0
+
+    result = await db.execute(
+        text(
+            "SELECT id, title, content FROM notes "
+            "WHERE is_vectorized = FALSE ORDER BY id LIMIT :limit"
+        ),
+        {"limit": batch},
+    )
+    notes = [dict(row) for row in result.mappings().all()]
+    if not notes:
+        return 0
+
+    texts = [f"{n['title'] or ''}\n\n{(n['content'] or '')[:4000]}" for n in notes]
+    try:
+        embeddings = await embed_texts(texts, db)
+    except Exception:  # noqa: BLE001
+        logger.exception("Embedding failed for memory notes")
+        return 0
+
+    embedded = 0
+    for note, embedding in zip(notes, embeddings):
+        if len(embedding) != expected_dim:
+            logger.error(
+                "Note %s embedding dim mismatch — got %s, expected %s — skipped.",
+                note["id"],
+                len(embedding),
+                expected_dim,
+            )
+            continue
+        await db.execute(
+            text(
+                "UPDATE notes SET embedding = CAST(:embedding AS vector), "
+                "is_vectorized = TRUE WHERE id = :id"
+            ),
+            {"embedding": to_pgvector(embedding), "id": note["id"]},
+        )
+        embedded += 1
+    await db.commit()
+    return embedded
+
+
 async def run_revectorize_background(model: str) -> None:
     """Re-embed emails, threads, contacts, and notes with the new model."""
     from services import contact_service, thread_service
@@ -512,12 +559,10 @@ async def run_revectorize_background(model: str) -> None:
                 await thread_service.build_threads(account_id, db)
                 await contact_service.build_contact_graph(account_id, db)
 
-        # Drain pending Obsidian notes in batches until none remain.
-        from services import obsidian_service
-
+        # Re-embed memory-layer notes in batches until none remain.
         while True:
             async with AsyncSessionLocal() as db:
-                embedded = await obsidian_service.vectorize_pending_notes(db)
+                embedded = await revectorize_notes(db)
             if not embedded:
                 break
 
@@ -536,7 +581,7 @@ async def revectorize_progress(db: AsyncSession) -> dict:
         ("SELECT COUNT(*) FILTER (WHERE is_vectorized) d, COUNT(*) t FROM emails "
          "WHERE triage_status IN ('keep','archive')"),
         "SELECT COUNT(*) FILTER (WHERE is_vectorized) d, COUNT(*) t FROM email_threads",
-        "SELECT COUNT(*) FILTER (WHERE is_vectorized) d, COUNT(*) t FROM obsidian_notes",
+        "SELECT COUNT(*) FILTER (WHERE is_vectorized) d, COUNT(*) t FROM notes",
     )
     for query in queries:
         try:

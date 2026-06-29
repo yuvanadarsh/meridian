@@ -25,7 +25,7 @@ from services import (
     contact_service,
     draft_service,
     gmail_service,
-    obsidian_service,
+    memory_service,
     provider_service,
     settings_service,
     usage_service,
@@ -54,21 +54,22 @@ async def _get_context_tiered(
 ) -> tuple[str, str]:
     """Return (context_text, source_label) using a tiered retrieval strategy.
 
-    Tier 1 searches Obsidian Email/Contact notes first, falls back to raw email
-    DB if nothing found. Tier 2 fetches the full thread from Gmail API, writes
-    an enriched note to Obsidian, and returns the complete content.
+    Tier 1 searches the PostgreSQL memory layer (email/contact notes) first, then
+    falls back to raw email DB if nothing found. Tier 2 fetches the full thread
+    from the Gmail API, writes an enriched note to memory, and returns the
+    complete content.
     """
-    # Always try Obsidian email/contact notes first
-    obsidian_email_ctx = await obsidian_service.get_obsidian_email_context(message, db, limit=5)
+    # Always try the memory layer's email/contact notes first.
+    memory_email_ctx = await memory_service.get_email_context(message, db, limit=5)
     logger.info(
-        "Obsidian email context returned %d chars for query: %s",
-        len(obsidian_email_ctx),
+        "Memory email context returned %d chars for query: %s",
+        len(memory_email_ctx),
         message[:50],
     )
 
     if tier == 1:
-        if obsidian_email_ctx:
-            return obsidian_email_ctx, "obsidian"
+        if memory_email_ctx:
+            return memory_email_ctx, "memory"
         email_ctx = await vector_service.get_email_context(message, db, limit=5)
         if email_ctx:
             return email_ctx, "email_db"
@@ -82,7 +83,7 @@ async def _get_context_tiered(
         thread_result = await db.execute(
             text(
                 """
-                SELECT thread_id, account_id, subject, participants, message_count, last_message_at
+                SELECT id, thread_id, account_id, subject, participants, message_count, last_message_at
                 FROM email_threads
                 WHERE embedding IS NOT NULL
                 ORDER BY embedding <=> CAST(:embedding AS vector)
@@ -93,39 +94,47 @@ async def _get_context_tiered(
         )
         thread_row = thread_result.mappings().first()
         if thread_row is None:
-            return obsidian_email_ctx or "", "obsidian"
+            return memory_email_ctx or "", "memory"
 
         thread_id = thread_row["thread_id"]
         account_id = thread_row["account_id"]
+        thread_pk = thread_row["id"]
 
         # Fetch full thread from Gmail API
         full_messages = await gmail_service.get_full_thread_from_gmail(thread_id, account_id, db)
         if full_messages:
-            # Enrich the Obsidian note with full content
-            accounts_result = await db.execute(
-                text("SELECT email FROM gmail_accounts WHERE id = :id"),
-                {"id": account_id},
-            )
-            user_emails = [row.email for row in accounts_result.fetchall()]
+            # Enrich the memory note with a fresh summary of the full content.
+            accounts_result = await db.execute(text("SELECT email FROM gmail_accounts"))
+            all_user_emails = [row.email for row in accounts_result.fetchall()]
+            user_usernames = [e.split("@")[0].lower() for e in all_user_emails]
             try:
-                await obsidian_service.write_thread_to_vault(
-                    thread_id=thread_id,
+                participants = thread_row["participants"] or []
+                contact_name = memory_service._primary_contact(
+                    participants, all_user_emails, user_usernames
+                )
+                messages_text = "\n\n".join(
+                    f"From: {m.get('from_address', '')}\n{(m.get('body_text') or '')[:300]}"
+                    for m in full_messages[:5]
+                )
+                summary = await memory_service._summarize_thread(
+                    thread_row["subject"] or "(no subject)", messages_text
+                )
+                await memory_service.write_email_note(
+                    thread_id=thread_pk,
+                    contact_name=contact_name,
                     subject=thread_row["subject"] or "(no subject)",
-                    participants=thread_row["participants"] or [],
-                    message_count=thread_row["message_count"] or len(full_messages),
-                    last_message_at=thread_row["last_message_at"] or datetime.utcnow(),
-                    messages=full_messages,
-                    user_emails=user_emails,
+                    summary=summary,
+                    participants=participants,
                     db=db,
                 )
                 logger.info(
-                    "Tier 2 retrieval: fetched full thread %s from Gmail, wrote to Obsidian",
+                    "Tier 2 retrieval: fetched full thread %s from Gmail, wrote to memory",
                     thread_id,
                 )
             except Exception:
-                logger.exception("Tier 2 Obsidian write failed for thread %s", thread_id)
+                logger.exception("Tier 2 memory write failed for thread %s", thread_id)
 
-            # Build context from full messages — inject directly; don't wait for Obsidian vectorization
+            # Build context from full messages — inject directly; don't wait for memory embedding
             ctx = "Full email thread (fetched directly from Gmail):\n\n"
             for msg in full_messages:
                 received = msg.get("received_at")
@@ -137,7 +146,7 @@ async def _get_context_tiered(
     except Exception:
         logger.exception("Tier 2 retrieval failed")
 
-    return obsidian_email_ctx or "", "obsidian"
+    return memory_email_ctx or "", "memory"
 
 
 # Only these explicit phrases should put Claude into email-drafting mode. A plain
@@ -497,7 +506,7 @@ async def _persist_exchange(
     output_tokens: int = 0,
     total: int = 0,
 ) -> None:
-    """Persist a user/assistant exchange, accumulate token usage, mirror to Obsidian."""
+    """Persist a user/assistant exchange, accumulate token usage, mirror to memory."""
     await db.execute(
         text(
             "INSERT INTO chat_messages (role, content, tokens_used) "
@@ -530,11 +539,16 @@ async def _persist_exchange(
     )
     await db.commit()
 
-    # Mirror the exchange into the Obsidian daily note (best-effort, no vault → no-op).
+    # Mirror the exchange into the daily memory note (best-effort).
     try:
-        await obsidian_service.append_exchange(user_message, reply)
+        await memory_service.write_daily_note(
+            date_str=datetime.now().strftime("%Y-%m-%d"),
+            user_message=user_message,
+            assistant_message=reply,
+            db=db,
+        )
     except Exception:  # noqa: BLE001 — never fail a chat over a note write
-        logger.exception("Obsidian daily-note append failed")
+        logger.exception("Daily memory-note write failed")
 
 
 @router.post("/message", response_model=ChatResponse)
@@ -568,9 +582,9 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
     draft_intent = is_draft_intent(payload.message)
 
     calendar_context = await _calendar_context(db)
-    obsidian_context = await obsidian_service.get_obsidian_context(payload.message, db)
+    memory_context = await memory_service.get_general_context(payload.message, db)
 
-    # Tiered email/contact retrieval: Obsidian notes first, DB fallback, Gmail API on demand.
+    # Tiered email/contact retrieval: memory notes first, DB fallback, Gmail API on demand.
     tier = 2 if any(p in payload.message.lower() for p in _DEEP_PHRASES) else 1
     email_context, context_source = await _get_context_tiered(payload.message, db, tier=tier)
     contact_context = await contact_service.get_contact_context(payload.message, db)
@@ -599,7 +613,7 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
 
     system = claude_service.build_system_prompt(
         calendar_context=calendar_context,
-        obsidian_context=obsidian_context,
+        memory_context=memory_context,
         email_context=email_context,
         contact_context=contact_context,
         accounts=accounts,
@@ -654,7 +668,7 @@ async def get_messages(
     """Return today's messages oldest-first to pre-load on page open.
 
     Only today's messages are returned — every morning the chat starts fresh.
-    Previous days are written to Obsidian daily notes and remain accessible
+    Previous days are written to daily memory notes and remain accessible
     via RAG when the user asks about them.
     """
     result = await db.execute(

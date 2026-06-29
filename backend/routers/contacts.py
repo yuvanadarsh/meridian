@@ -1,4 +1,4 @@
-"""Contact intelligence routes: build the contact graph, query contacts, and Obsidian export."""
+"""Contact intelligence routes: build the contact graph, query contacts, and memory export."""
 
 import json
 import logging
@@ -7,7 +7,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.database import get_db
-from services import contact_service, gmail_service, obsidian_service, settings_service
+from services import contact_service, gmail_service, memory_service, settings_service
 
 logger = logging.getLogger(__name__)
 
@@ -50,14 +50,18 @@ async def search_contacts(
 
 @router.post("/export-to-obsidian")
 async def export_contacts_to_obsidian(background_tasks: BackgroundTasks):
-    """Write all contacts to the Obsidian vault as linked profile notes."""
-    background_tasks.add_task(obsidian_service.export_contacts_to_obsidian_background)
+    """Write all contacts to the memory layer as profile notes.
+
+    The URL keeps its legacy name for frontend compatibility; the export now
+    writes directly to PostgreSQL rather than an Obsidian vault.
+    """
+    background_tasks.add_task(memory_service.export_contacts_to_memory)
     return {"status": "started"}
 
 
 @router.get("/obsidian-export/progress")
 async def contacts_obsidian_export_progress(db: AsyncSession = Depends(get_db)):
-    """Return the Obsidian contacts export progress."""
+    """Return the contacts memory-export progress. (URL kept for compatibility.)"""
     raw = await settings_service.get_value(db, "obsidian_contacts_export_progress")
     if not raw:
         return {"processed": 0, "total": 0, "done": False}

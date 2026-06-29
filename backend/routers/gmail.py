@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import get_settings
 from db.database import get_db
 from models.gmail import AccountUpdate, BulkTriageRequest, SweepOptions, TriageApproval
-from services import gmail_service, obsidian_service, thread_service, triage_service, vector_service
+from services import gmail_service, memory_service, thread_service, triage_service, vector_service
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -302,8 +302,8 @@ async def approve_triage(
     # Build memory from the surviving keep + archive emails, then group into threads.
     background_tasks.add_task(vector_service.run_vectorize_background, account_id)
     background_tasks.add_task(thread_service.run_build_threads_background, account_id)
-    # Export threads to Obsidian vault after vectorization and thread build are queued.
-    background_tasks.add_task(obsidian_service.export_threads_to_obsidian_background, account_id)
+    # Write thread summaries to the memory layer after vectorize/thread-build are queued.
+    background_tasks.add_task(memory_service.export_threads_to_memory, account_id)
     return result
 
 
@@ -390,21 +390,25 @@ async def export_threads_to_obsidian(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
-    """Write all email threads for an account to the Obsidian vault as linked notes."""
+    """Write all email threads for an account to the memory layer as notes.
+
+    The URL keeps its legacy name for frontend compatibility; the export now
+    writes directly to PostgreSQL rather than an Obsidian vault.
+    """
     accounts = await gmail_service.list_accounts(db)
     if not any(account["id"] == account_id for account in accounts):
         raise HTTPException(status_code=404, detail="Account not found")
-    background_tasks.add_task(obsidian_service.export_threads_to_obsidian_background, account_id)
+    background_tasks.add_task(memory_service.export_threads_to_memory, account_id)
     return {"status": "started", "account_id": account_id}
 
 
 @router.get("/threads/obsidian-export/progress/{account_id}")
 async def obsidian_export_progress(account_id: int, db: AsyncSession = Depends(get_db)):
-    """Return the Obsidian thread export progress for an account.
+    """Return the thread memory-export progress for an account.
 
-    Falls back to counting actual email notes in obsidian_notes so the row
-    correctly shows "In Obsidian ✓" for exports done before progress tracking
-    was introduced.
+    Falls back to counting actual email notes in the notes table so the row
+    correctly shows the export as complete for runs done before progress tracking
+    was introduced. (URL kept for frontend compatibility.)
     """
     from services import settings_service
 
@@ -416,9 +420,9 @@ async def obsidian_export_progress(account_id: int, db: AsyncSession = Depends(g
         except (json.JSONDecodeError, ValueError):
             pass
 
-    # No stored progress — check whether email notes already exist in the vault.
+    # No stored progress — check whether email notes already exist in memory.
     notes_result = await db.execute(
-        text("SELECT count(*) AS count FROM obsidian_notes WHERE file_path LIKE '%/Emails/%'")
+        text("SELECT count(*) AS count FROM notes WHERE note_type = 'email'")
     )
     notes_count = notes_result.fetchone().count
     if notes_count > 0:

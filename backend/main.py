@@ -36,7 +36,6 @@ from routers import (
     usage,
     voice,
 )
-from services import obsidian_service
 
 logging.basicConfig(
     level=logging.INFO,
@@ -145,7 +144,7 @@ async def _record_task_run(db, task_key: str, result: dict) -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """Verify the DB on startup and run the Obsidian background tasks for the app's life."""
+    """Verify the DB on startup and run the background task scheduler for the app's life."""
     try:
         await check_connection()
         logger.info("Database connection OK (%s)", settings.postgres_db)
@@ -153,12 +152,6 @@ async def lifespan(_app: FastAPI):
         logger.error("Database connection FAILED: %s", exc)
 
     background_tasks: list[asyncio.Task] = []
-    if obsidian_service.vault_path() is not None:
-        await obsidian_service.cleanup_vault_root_stubs()
-        await obsidian_service.scan_vault_on_startup()
-        background_tasks.append(asyncio.create_task(obsidian_service.watch_vault()))
-        background_tasks.append(asyncio.create_task(obsidian_service.vectorize_notes_loop()))
-        logger.info("Obsidian vault watcher + note vectorizer started")
 
     # Generic scheduler runs registered tasks (email poll, calendar sync) from
     # the scheduled_tasks table. The email poll also triages new mail on arrival.

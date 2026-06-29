@@ -26,7 +26,7 @@ HAIKU_MODEL = "claude-haiku-4-5-20251001"
 def build_system_prompt(
     *,
     calendar_context: str = "",
-    obsidian_context: str = "",
+    memory_context: str = "",
     email_context: str = "",
     contact_context: str = "",
     accounts: list[dict] | None = None,
@@ -39,7 +39,7 @@ def build_system_prompt(
 ) -> str:
     """Assemble the chat system prompt.
 
-    Concise, voice-first rules followed by any calendar / email / Obsidian
+    Concise, voice-first rules followed by any calendar / email / memory
     context. Sections are omitted entirely when empty so the prompt stays tight.
     The ``tone`` setting controls response length/personality, and ``accounts``
     lets Claude pick a valid sending account for draft/calendar actions.
@@ -84,7 +84,7 @@ def build_system_prompt(
         prompt += "\n\nINBOX STATUS:\n" + inbox_context
     if email_context:
         prompt += "\n\nRELEVANT EMAILS:\n" + email_context
-    for section in (contact_context, calendar_context, obsidian_context):
+    for section in (contact_context, calendar_context, memory_context):
         if section:
             prompt += "\n\n" + section
     return prompt

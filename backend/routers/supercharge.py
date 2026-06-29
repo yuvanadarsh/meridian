@@ -1,4 +1,4 @@
-"""Supercharge routes: upload AI chat exports, parse into Obsidian, track progress."""
+"""Supercharge routes: upload AI chat exports, parse into memory, track progress."""
 
 import json
 import logging
@@ -7,7 +7,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFi
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.database import get_db
-from services import obsidian_service, supercharge_service
+from services import supercharge_service
 
 logger = logging.getLogger(__name__)
 
@@ -23,13 +23,7 @@ async def upload_export(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
-    """Upload a Claude/ChatGPT/Gemini export JSON; parse + vectorize in the background."""
-    if obsidian_service.vault_path() is None:
-        raise HTTPException(
-            status_code=400,
-            detail="OBSIDIAN_VAULT_PATH is not configured — set it before importing.",
-        )
-
+    """Upload a Claude/ChatGPT/Gemini export JSON; parse + embed into memory in the background."""
     raw = await file.read()
     if len(raw) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="File too large (max 50 MB).")

@@ -50,9 +50,6 @@ class Settings(BaseSettings):
     google_client_id: str = ""
     google_client_secret: str = ""
 
-    # Obsidian
-    obsidian_vault_path: str = ""
-
     # App
     frontend_url: str = "http://localhost:5173"
     api_url: str = "http://localhost:8000"

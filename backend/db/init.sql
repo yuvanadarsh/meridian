@@ -111,21 +111,30 @@ CREATE TABLE IF NOT EXISTS sweep_progress (
 );
 
 -- ---------------------------------------------------------------------------
--- Obsidian notes: vault .md files indexed for RAG retrieval.
+-- Notes: Meridian's PostgreSQL memory layer. Email/contact/chat/sent summaries
+-- are written here directly and embedded for RAG retrieval. (Formerly the
+-- Obsidian-backed `obsidian_notes` table — see migration 022.)
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS obsidian_notes (
+CREATE TABLE IF NOT EXISTS notes (
     id            SERIAL PRIMARY KEY,
-    file_path     TEXT UNIQUE NOT NULL,
+    file_path     TEXT UNIQUE,         -- synthetic pg:// path, retained for uniqueness
     title         TEXT,
     content       TEXT,
-    wikilinks     TEXT[],              -- extracted [[links]]
+    note_type     VARCHAR(50) DEFAULT 'general',  -- email|contact|chat|persistent_chat|sent|daily|general
+    source_id     INTEGER,             -- originating record id (e.g. email_threads.id, contacts.id)
+    wikilinks     TEXT[] DEFAULT '{}', -- extracted [[links]] for the future /graph page
     embedding     vector(512),
     last_modified TIMESTAMP,
     is_vectorized BOOLEAN DEFAULT FALSE,
-    created_at    TIMESTAMP DEFAULT NOW()
+    created_at    TIMESTAMP DEFAULT NOW(),
+    updated_at    TIMESTAMP DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_obsidian_vectorized ON obsidian_notes(is_vectorized);
+CREATE INDEX IF NOT EXISTS idx_notes_embedding ON notes
+    USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX IF NOT EXISTS idx_notes_vectorized ON notes(is_vectorized);
+CREATE INDEX IF NOT EXISTS idx_notes_type ON notes(note_type);
+CREATE INDEX IF NOT EXISTS idx_notes_source ON notes(source_id);
 
 -- ---------------------------------------------------------------------------
 -- Calendar events: upcoming and recent events synced from Google Calendar.
