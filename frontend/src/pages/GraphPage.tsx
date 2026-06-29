@@ -67,7 +67,7 @@ export function GraphPage() {
   const [activeTopics, setActiveTopics] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [stats, setStats] = useState({ totalContacts: 0, totalEdges: 0 })
-  const [size, setSize] = useState({ width: 0, height: 0 })
+  const [size, setSize] = useState({ width: 800, height: 600 })
 
   // Load the graph once on mount.
   useEffect(() => {
@@ -102,7 +102,7 @@ export function GraphPage() {
     })
     observer.observe(el)
     return () => observer.disconnect()
-  }, [])
+  }, [loading])
 
   // The distinct topics across all contacts, for the filter pills (top 12).
   const allTopics = useMemo(
