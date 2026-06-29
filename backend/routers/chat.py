@@ -23,7 +23,6 @@ from services import (
     calendar_service,
     claude_service,
     contact_service,
-    digest_service,
     draft_service,
     gmail_service,
     obsidian_service,
@@ -49,17 +48,6 @@ _DEEP_PHRASES = (
     "show me everything",
     "read the full",
 )
-
-# Phrases that mean "read me my daily brief" instead of a normal chat turn.
-_DIGEST_TRIGGERS = (
-    "digest",
-    "brief",
-    "morning brief",
-    "what's going on",
-    "whats going on",
-    "catch me up",
-)
-
 
 async def _get_context_tiered(
     message: str, db: AsyncSession, tier: int = 1
@@ -152,11 +140,6 @@ async def _get_context_tiered(
     return obsidian_email_ctx or "", "obsidian"
 
 
-def _is_digest_request(message: str) -> bool:
-    text_lower = message.lower()
-    return any(trigger in text_lower for trigger in _DIGEST_TRIGGERS)
-
-
 # Only these explicit phrases should put Claude into email-drafting mode. A plain
 # question that happens to mention "email", a person, or a subject must NOT trigger
 # a draft — that hallucination was the Phase 3 bug this guards against.
@@ -209,6 +192,36 @@ def _is_self_referential(message: str) -> bool:
     """True when the draft recipient is the user themselves."""
     msg_lower = message.lower().strip()
     return any(ref in msg_lower for ref in _SELF_REFERENTIAL)
+
+
+async def _inbox_context(db: AsyncSession) -> str:
+    """Summarize the unapproved email queue so Claude can answer "what's pending?".
+
+    Returns a short block describing how many emails are waiting in each
+    classification, or an empty-queue note. This lets the model answer inbox
+    status questions directly from the system prompt without any tool call.
+    """
+    result = await db.execute(
+        text(
+            """
+            SELECT classification, COUNT(*) AS count
+            FROM email_queue
+            WHERE approved_at IS NULL
+            GROUP BY classification
+            """
+        )
+    )
+    summary = {row.classification: row.count for row in result.fetchall()}
+    total = sum(summary.values())
+    if total == 0:
+        return "Inbox queue is empty — no pending emails."
+    return (
+        f"Current inbox queue ({total} pending):\n"
+        f"- Trash: {summary.get('trash', 0)} emails\n"
+        f"- Archive: {summary.get('archive', 0)} emails\n"
+        f"- Keep: {summary.get('keep', 0)} emails\n"
+        f"- Draft needed: {summary.get('draft', 0)} emails"
+    )
 
 
 async def _calendar_context(db: AsyncSession) -> str:
@@ -545,20 +558,6 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
             await _persist_exchange(db, payload.message, reply, total=0)
             return ChatResponse(response=reply, tokens=TokenUsage(input=0, output=0, total=0))
 
-    # "Give me the digest" short-circuits normal chat: build the brief and return
-    # its voice-ready text so callers (voice/TTS) read it aloud.
-    if _is_digest_request(payload.message):
-        try:
-            digest = await digest_service.build_digest(db)
-            reply = digest["full_text"]
-        except Exception:  # noqa: BLE001
-            logger.exception("Digest request failed")
-            reply = "I couldn't put together your brief right now."
-        await _persist_exchange(db, payload.message, reply, total=0)
-        return ChatResponse(
-            response=reply, tokens=TokenUsage(input=0, output=0, total=0)
-        )
-
     try:
         accounts = await gmail_service.list_accounts(db)
     except Exception:  # noqa: BLE001
@@ -596,6 +595,8 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
     except Exception:
         user_tz = "America/New_York"
 
+    inbox_context = await _inbox_context(db)
+
     system = claude_service.build_system_prompt(
         calendar_context=calendar_context,
         obsidian_context=obsidian_context,
@@ -606,6 +607,7 @@ async def send_message(payload: ChatRequest, db: AsyncSession = Depends(get_db))
         allow_draft=draft_intent,
         self_email=self_email,
         user_tz=user_tz,
+        inbox_context=inbox_context,
     )
     if context_source != "none":
         system += f"\nContext source: {context_source}"

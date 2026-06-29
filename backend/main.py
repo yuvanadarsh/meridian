@@ -25,12 +25,11 @@ from routers import (
     calendar,
     chat,
     contacts,
-    digest,
     drafts,
     gmail,
     health,
+    inbox,
     persistent_chats,
-    review,
     settings as settings_router,
     supercharge,
     tasks as tasks_router,
@@ -161,8 +160,8 @@ async def lifespan(_app: FastAPI):
         background_tasks.append(asyncio.create_task(obsidian_service.vectorize_notes_loop()))
         logger.info("Obsidian vault watcher + note vectorizer started")
 
-    # Generic scheduler runs registered tasks (morning brief, email poll,
-    # afternoon review, calendar sync) from the scheduled_tasks table.
+    # Generic scheduler runs registered tasks (email poll, calendar sync) from
+    # the scheduled_tasks table. The email poll also triages new mail on arrival.
     background_tasks.append(asyncio.create_task(run_task_scheduler()))
     logger.info("Task scheduler started")
 
@@ -193,9 +192,8 @@ app.include_router(calendar.router)
 app.include_router(chat.router)
 app.include_router(persistent_chats.router)
 app.include_router(voice.router)
-app.include_router(review.router)
+app.include_router(inbox.router)
 app.include_router(drafts.router)
-app.include_router(digest.router)
 app.include_router(settings_router.router)
 app.include_router(supercharge.router)
 app.include_router(tasks_router.router)

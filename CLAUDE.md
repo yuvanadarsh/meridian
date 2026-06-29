@@ -7,7 +7,7 @@
 
 ## What Meridian Is
 
-Meridian is a local personal AI OS. It manages multiple Gmail accounts and Google Calendars, surfaces daily briefs (news, stocks, calendar digest), drafts emails in the user's voice using RAG over their email history, and supports voice interaction via push-to-talk (graduating to always-on wake word). All data is stored locally. The only external calls are Claude API, VoyageAI, ElevenLabs, and Google APIs.
+Meridian is a local personal AI OS. It manages multiple Gmail accounts and Google Calendars, continuously triages incoming email into an inbox queue (trash/archive/keep/draft), drafts emails in the user's voice using RAG over their email history, and supports voice interaction via push-to-talk (graduating to always-on wake word). All data is stored locally. The only external calls are Claude API, VoyageAI, ElevenLabs, and Google APIs.
 
 ---
 
@@ -25,6 +25,7 @@ Meridian uses a unified memory model:
 - `emails`, `email_threads`, `contacts` tables — raw data and metadata
 - `obsidian_notes` table — vault file index with pgvector embeddings (512 dims, voyage-3-lite)
 - `gmail_accounts`, `calendar_events`, `drafts`, `user_settings` — operational state
+- `email_queue` — persistent inbox queue from continuous triage (one row per email, classification + on-demand draft link), accumulates until the user approves on the Inbox page
 - All vector embeddings for RAG are generated FROM Obsidian note content
 
 **RETRIEVAL PIPELINE (tiered)**
@@ -97,7 +98,7 @@ meridian/
 │   │   ├── calendar.py
 │   │   ├── chat.py
 │   │   ├── voice.py
-│   │   └── brief.py
+│   │   └── inbox.py
 │   ├── services/
 │   │   ├── gmail_service.py      # Gmail API + sweep logic
 │   │   ├── calendar_service.py
@@ -134,8 +135,6 @@ meridian/
 │       │   │   ├── SettingsPanel.tsx
 │       │   │   ├── DraftsPanel.tsx
 │       │   │   └── ConnectionsPanel.tsx
-│       │   ├── Brief/
-│       │   │   └── DailyBrief.tsx
 │       │   └── TokenUsage/
 │       │       └── TokenCounter.tsx
 │       ├── hooks/
@@ -416,7 +415,7 @@ The orb is the visual and interactive core of Meridian.
 - Chat input — below orb, pill shape, glassmorphism (`bg-white/5 backdrop-blur border border-white/10`)
 - Hamburger — bottom-left, circular, `bg-white/10`
 
-**Hamburger menu items:** Settings, Drafts, Connections, Brief
+**Hamburger menu items:** Settings, Drafts, Connections, Inbox
 
 ---
 
@@ -500,20 +499,33 @@ docs(readme): add setup, oauth, and local development instructions
 | **3 — Intelligence**         | Email drafting in user's voice, news digest, stock watchlist, web search                    |
 | **4 — Memory & intelligence**| Threading, hybrid search, contacts graph, multi-provider AI, scheduled digest               |
 | **5A — Memory unification**  | Email threads + contacts written to Obsidian; tiered RAG with Obsidian-first retrieval      |
-| **5B — Scheduling & review** | Task registry + dynamic scheduler, 15-min Gmail polling, afternoon email review + Daily Review panel, calendar conflict detection, email-driven event suggestions |
+| **5B — Scheduling & review** | Task registry + dynamic scheduler, 15-min Gmail polling, calendar conflict detection, email-driven event suggestions |
 | **5C — Always-on voice**     | Wake word detection (future)                                                                |
+| **5D — Inbox redesign**      | Daily brief removed; continuous triage on arrival into a persistent `email_queue` (trash/archive/keep/draft); Inbox page with approve & on-demand draft generation; send-then-embed to Obsidian |
 
-**Current phase: 5B complete**
+**Current phase: 5D complete**
 
-### Task registry (Phase 5B)
+### Task registry (Phase 5B+)
 
 Background tasks live in `backend/services/tasks/`, each a `BaseTask` subclass with
 `run()`, `name`, `description`, and `default_schedule`. Register a new task by
 adding it to `TASK_REGISTRY` in `services/tasks/__init__.py`. The generic
 `run_task_scheduler` in `main.py` reads the `scheduled_tasks` table (configured
 from Settings) — `email_poll` runs on its own 15-minute interval; clock-based
-tasks run at their `schedule_time` in the user's timezone. The afternoon review
-never mutates Gmail; the user approves in the Daily Review panel first.
+tasks run at their `schedule_time` in the user's timezone. The two registered
+tasks are `email_poll` and `calendar_sync` (the morning brief and afternoon
+review were removed in the inbox redesign).
+
+### Continuous triage & inbox queue (Phase 5D)
+
+`email_poll` fetches new mail and immediately classifies each message into one
+of `trash`/`archive`/`keep`/`draft`, inserting a row into `email_queue`. The
+queue accumulates until the user approves it on the Inbox page — the ONLY point
+where Gmail is mutated (trash/archive). `draft`-classified mail can have a reply
+generated on demand ("Approve & Generate Draft"); sending a draft records the
+sent email to the Obsidian `Sent/` folder. Triage classification never auto-
+applies to Gmail. The initial onboarding sweep keeps its own 3-category triage
+review path, separate from this continuous queue.
 
 ---
 

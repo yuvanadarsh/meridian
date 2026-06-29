@@ -1,7 +1,7 @@
--- Meridian complete schema — reflects all migrations through 020
+-- Meridian complete schema — reflects all migrations through 021
 -- Fresh installs: run this file only
 -- Existing installs: run individual migration files in db/migrations/
--- Last updated: 2026-06-27
+-- Last updated: 2026-06-28
 --
 -- Prerequisites: PostgreSQL with pgvector installed.
 --   psql -U your_user -c "CREATE DATABASE meridian;"
@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS emails (
     snippet        TEXT,
     summary        TEXT,                                 -- one-sentence AI summary
     received_at    TIMESTAMP,
-    triage_status  VARCHAR(20) DEFAULT 'pending',        -- 'keep', 'archive', 'trash', 'pending', 'unreadable'
+    triage_status  VARCHAR(20) DEFAULT 'pending',        -- 'keep', 'archive', 'trash', 'draft', 'pending', 'unreadable'
     is_vectorized  BOOLEAN DEFAULT FALSE,
     embedding      vector(512),
     search_vector  tsvector GENERATED ALWAYS AS (
@@ -184,7 +184,6 @@ CREATE TABLE IF NOT EXISTS user_settings (
 
 INSERT INTO user_settings (key, value) VALUES
     ('response_tone',   'concise'),
-    ('digest_schedule', '08:00'),
     ('voice_enabled',   'true'),
     ('agent_name',      'Meridian'),
     ('timezone',        'America/New_York'),
@@ -194,7 +193,10 @@ INSERT INTO user_settings (key, value) VALUES
 ON CONFLICT (key) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
--- Digest cache: one row per day, upserted when the morning brief is built.
+-- LEGACY: digest_cache held the old morning-brief output (calendar, email,
+-- news, stocks). The daily brief was removed in the inbox redesign (migration
+-- 021) and nothing writes to this table anymore. Kept only so existing installs
+-- don't error on the DROP; do not use it in new features.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS digest_cache (
     id         SERIAL PRIMARY KEY,
@@ -279,25 +281,38 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
     created_at        TIMESTAMP DEFAULT NOW()
 );
 
+-- email_poll fetches new mail and triages it on arrival (continuous triage);
+-- calendar_sync refreshes events. The morning brief and afternoon review tasks
+-- were removed in the inbox redesign (migration 021).
 INSERT INTO scheduled_tasks (task_key, display_name, schedule_time, schedule_days) VALUES
-    ('morning_brief',     'Morning Brief',            '08:00', 'daily'),
     ('email_poll',        'Email Sync',               '00:00', 'daily'),
-    ('afternoon_review',  'Afternoon Email Review',   '17:00', 'daily'),
     ('calendar_sync',     'Calendar Sync',            '07:00', 'daily')
 ON CONFLICT DO NOTHING;
 
 -- ---------------------------------------------------------------------------
--- Afternoon reviews: one row per day, holds the reviewed emails as JSON for
--- the Daily Review panel. The user approves or dismisses before any mutation.
+-- Email queue: persistent inbox queue for continuous triage. The email poll
+-- classifies each new message on arrival and inserts one row here; entries
+-- accumulate until the user approves them in the Inbox page (the ONLY point
+-- where Gmail is mutated). 'draft'-classified emails get a draft generated on
+-- demand. Replaces the old afternoon_reviews batch table.
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS afternoon_reviews (
-    id          SERIAL PRIMARY KEY,
-    review_date DATE UNIQUE NOT NULL DEFAULT CURRENT_DATE,
-    emails_json JSONB NOT NULL DEFAULT '[]',
-    status      VARCHAR(20) DEFAULT 'pending',  -- 'pending', 'approved', 'dismissed'
-    approved_at TIMESTAMP,
-    updated_at  TIMESTAMP DEFAULT NOW()
+CREATE TABLE IF NOT EXISTS email_queue (
+    id             SERIAL PRIMARY KEY,
+    email_id       INTEGER NOT NULL REFERENCES emails(id) ON DELETE CASCADE,
+    account_id     INTEGER NOT NULL REFERENCES gmail_accounts(id),
+    classification VARCHAR(20) NOT NULL,           -- 'trash', 'archive', 'keep', 'draft'
+    ai_summary     TEXT,
+    needs_draft    BOOLEAN DEFAULT FALSE,
+    draft_id       INTEGER REFERENCES drafts(id),
+    draft_status   VARCHAR(20),                    -- NULL, 'generating', 'ready', 'sent'
+    approved_at    TIMESTAMP,
+    created_at     TIMESTAMP DEFAULT NOW(),
+    UNIQUE(email_id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_eq_account ON email_queue(account_id);
+CREATE INDEX IF NOT EXISTS idx_eq_approved ON email_queue(approved_at);
+CREATE INDEX IF NOT EXISTS idx_eq_classification ON email_queue(classification);
 
 -- ---------------------------------------------------------------------------
 -- Usage log: per-call API usage across all providers with calculated cost.

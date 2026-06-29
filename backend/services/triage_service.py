@@ -18,6 +18,10 @@ from services import gmail_service, provider_service, settings_service
 logger = logging.getLogger(__name__)
 
 VALID_STATUSES = {"trash", "archive", "keep"}
+# Continuous triage (email poll on arrival) adds a 4th category, 'draft', for
+# emails that need a reply. The initial sweep keeps the 3-category set above so
+# its existing review UI is unaffected.
+CONTINUOUS_VALID_STATUSES = {"trash", "archive", "keep", "draft"}
 TRIAGE_BATCH_SIZE = 50
 
 # Extra instruction injected into the triage prompt based on the user's chosen
@@ -150,6 +154,88 @@ async def classify_and_summarize_batch(emails: list[dict], db: AsyncSession) -> 
         if status not in VALID_STATUSES:
             status = "keep"
         results.append({"status": status, "summary": str(item.get("summary") or "").strip()})
+    return results
+
+
+# Four-category prompt for continuous triage. Unlike the sweep's batch prompt,
+# this adds a 'draft' category for mail that warrants a reply, so the Inbox can
+# offer "Approve & Generate Draft".
+_CONTINUOUS_PROMPT = (
+    "Classify each email into exactly one category and write a one-sentence summary.\n"
+    "Return ONLY a JSON array of exactly {count} objects, in the same order as the "
+    "emails, with no other text:\n"
+    '[{{"classification": "trash|archive|keep|draft", "summary": "one sentence"}}, ...]\n\n'
+    "Categories:\n"
+    "- trash: promotional emails, automated notifications, newsletters, OTPs, job "
+    "alerts, marketing, social media and LinkedIn notifications — anything the user "
+    "doesn't need to read or act on\n"
+    "- archive: FYI emails, receipts, confirmations, invoices, useful newsletters, "
+    "GitHub/GitLab notifications, informational updates — keep but no action needed\n"
+    "- keep: emails that need the user's attention but no reply is required "
+    "(reminders, announcements, important updates to read)\n"
+    "- draft: emails that require a reply from the user — direct questions, meeting "
+    "requests, mail from real people asking for something, collaboration requests, "
+    "anything where not replying would be rude or costly\n"
+    "{mode}"
+    "\nEmails:\n{emails}"
+)
+
+
+async def classify_emails(emails: list[dict], db: AsyncSession) -> list[dict]:
+    """Classify a batch into 4 categories (trash/archive/keep/draft) with summaries.
+
+    Used by the continuous triage path (email poll on arrival), NOT the initial
+    sweep. Returns a list aligned with ``emails``, each ``{"classification",
+    "summary"}``. Any failure or malformed reply degrades to ``keep`` with an
+    empty summary — triage is never destructive on ambiguity, and the user
+    approves everything in the Inbox before it applies to Gmail.
+    """
+    if not emails:
+        return []
+
+    lines = []
+    for index, email in enumerate(emails, 1):
+        sender = (email.get("from_address") or "")[:120]
+        subject = (email.get("subject") or "").replace("\n", " ")[:200]
+        snippet = (email.get("snippet") or "").replace("\n", " ")[:200]
+        lines.append(f"{index}. From: {sender} | Subject: {subject} | Snippet: {snippet}")
+
+    prompt = _CONTINUOUS_PROMPT.format(
+        count=len(emails),
+        mode=await _mode_instruction(db),
+        emails="\n".join(lines),
+    )
+
+    fallback = [{"classification": "keep", "summary": ""} for _ in emails]
+    try:
+        reply = await provider_service.call_classify(db, prompt, max_tokens=3000)
+        data = json.loads(_extract_json_array(reply))
+    except Exception as exc:  # noqa: BLE001 — keep the poll going past a bad batch
+        logger.error("Continuous triage failed for %s emails: %s", len(emails), exc)
+        return fallback
+
+    if not isinstance(data, list) or len(data) != len(emails):
+        logger.warning(
+            "Continuous triage returned %s items, expected %s — defaulting to keep",
+            len(data) if isinstance(data, list) else "non-list",
+            len(emails),
+        )
+        return fallback
+
+    results = []
+    for item in data:
+        if not isinstance(item, dict):
+            results.append({"classification": "keep", "summary": ""})
+            continue
+        classification = str(item.get("classification", "keep")).lower().strip()
+        if classification not in CONTINUOUS_VALID_STATUSES:
+            classification = "keep"
+        results.append(
+            {
+                "classification": classification,
+                "summary": str(item.get("summary") or "").strip(),
+            }
+        )
     return results
 
 

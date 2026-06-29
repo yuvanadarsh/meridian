@@ -4,13 +4,12 @@ import { api } from '../../api/client'
 import type { ScheduledTask } from '../../api/client'
 import { Toggle } from './Toggle'
 
-// The four fixed tasks, in display order. No add/delete in this UI — these map
-// 1:1 to the registry in backend/services/tasks. `email_poll` runs on an
-// interval (minutes); the rest run at a daily clock time.
+// The fixed tasks, in display order. No add/delete in this UI — these map 1:1
+// to the registry in backend/services/tasks. `email_poll` runs on an interval
+// (minutes) and triages new mail on arrival; `calendar_sync` runs at a daily
+// clock time.
 const FIXED_TASKS: { key: string; label: string }[] = [
-  { key: 'morning_brief', label: 'Morning Brief' },
   { key: 'email_poll', label: 'Email Sync' },
-  { key: 'afternoon_review', label: 'Afternoon Review' },
   { key: 'calendar_sync', label: 'Calendar Sync' },
 ]
 
