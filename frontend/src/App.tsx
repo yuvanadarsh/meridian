@@ -12,6 +12,7 @@ import { ConnectionsPage } from './pages/ConnectionsPage'
 import { ContactsPage } from './pages/ContactsPage'
 import { DraftDetailPage } from './pages/DraftDetailPage'
 import { DraftsPage } from './pages/DraftsPage'
+import { GraphPage } from './pages/GraphPage'
 import { HomePage } from './pages/HomePage'
 import { InboxPage } from './pages/InboxPage'
 import { SettingsPage } from './pages/SettingsPage'
@@ -100,6 +101,7 @@ function App() {
       <main className="ml-[220px] flex-1 overflow-auto">
         <Routes>
           <Route path="/" element={<HomePage />} />
+          <Route path="/graph" element={<GraphPage />} />
           <Route path="/analytics" element={<AnalyticsPage />} />
           <Route path="/chat" element={<ChatPage />} />
           <Route path="/chat/:id" element={<ChatDetailPage />} />
