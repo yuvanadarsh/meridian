@@ -213,7 +213,6 @@ export interface PersistentChatMessage {
 }
 
 export interface PersistentChat extends PersistentChatSummary {
-  obsidian_note_path: string | null
   messages: PersistentChatMessage[]
 }
 
