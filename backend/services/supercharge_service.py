@@ -1,10 +1,9 @@
-"""Supercharge import: parse AI chat exports into the Obsidian vault.
+"""Supercharge import: parse AI chat exports into the memory layer.
 
 Accepts Claude, ChatGPT, and Gemini conversation exports, normalizes each into a
-common ``{title, date, exchanges}`` shape, and writes one Markdown note per
-conversation under ``{OBSIDIAN_VAULT_PATH}/AI Conversations/{provider}/``. The
-vault watcher then picks the new files up and vectorizes them automatically, so
-the user's past AI conversations become part of Meridian's memory.
+common ``{title, date, exchanges}`` shape, and writes one note per conversation
+to the PostgreSQL ``notes`` table (embedded immediately), so the user's past AI
+conversations become part of Meridian's memory and are searchable via RAG.
 """
 
 import logging
@@ -14,7 +13,7 @@ from datetime import datetime, timezone
 from sqlalchemy import text
 
 from db.database import AsyncSessionLocal
-from services import obsidian_service
+from services import memory_service
 
 logger = logging.getLogger(__name__)
 
@@ -168,8 +167,8 @@ async def parse_export(data) -> tuple[str, list[dict]]:
     return provider, await parse_gemini_export(data)
 
 
-def _render_markdown(provider: str, conversation: dict, topics: list[str]) -> str:
-    """Render one normalized conversation as an Obsidian note."""
+def _render_markdown(provider: str, conversation: dict) -> str:
+    """Render one normalized conversation as note content."""
     lines = [
         f"# {conversation['title']}",
         f"*Imported from {provider} — {conversation['date']}*",
@@ -186,41 +185,25 @@ def _render_markdown(provider: str, conversation: dict, topics: list[str]) -> st
             lines.append("")
         lines.append("---")
         lines.append("")
-    if topics:
-        lines.append("## Key Topics")
-        lines.append(" ".join(f"[[{topic}]]" for topic in topics))
-        lines.append("")
     return "\n".join(lines)
 
 
-async def _write_conversation(provider: str, conversation: dict) -> bool:
-    """Write a single conversation to the vault. Returns True on success."""
-    root = obsidian_service.vault_path()
-    if root is None:
-        return False
-
-    folder = root / "AI Conversations" / provider
-    folder.mkdir(parents=True, exist_ok=True)
-
-    # Extract a few topics for wikilinks (best-effort; empty on failure).
-    sample = " ".join(
-        f"{ex.get('human', '')} {ex.get('assistant', '')}"
-        for ex in conversation["exchanges"][:3]
-    )[:2000]
-    try:
-        topics = await obsidian_service.extract_wikilinks(sample)
-    except Exception:  # noqa: BLE001
-        topics = []
-
-    filename = f"{conversation['date']} {_safe_filename(conversation['title'])}.md"
-    (folder / filename).write_text(
-        _render_markdown(provider, conversation, topics), encoding="utf-8"
+async def _write_conversation(provider: str, conversation: dict, db) -> bool:
+    """Write a single conversation to the memory layer. Returns True on success."""
+    title = f"AI Conversations/{provider}/{_safe_filename(conversation['title'])}"
+    await memory_service.write_note(
+        title=title,
+        content=_render_markdown(provider, conversation),
+        note_type="general",
+        source_id=None,
+        wikilinks=[],
+        db=db,
     )
     return True
 
 
 async def process_import(import_id: int, provider: str, conversations: list[dict]) -> None:
-    """Background task: write every conversation to the vault, tracking progress."""
+    """Background task: write every conversation to memory, tracking progress."""
     async with AsyncSessionLocal() as db:
         await db.execute(
             text("UPDATE supercharge_imports SET status = 'processing' WHERE id = :id"),
@@ -232,7 +215,8 @@ async def process_import(import_id: int, provider: str, conversations: list[dict
     try:
         for conversation in conversations:
             try:
-                await _write_conversation(provider, conversation)
+                async with AsyncSessionLocal() as db:
+                    await _write_conversation(provider, conversation, db)
             except Exception:  # noqa: BLE001 — skip one bad conversation, keep going
                 logger.exception("Failed to write a %s conversation", provider)
             processed += 1

@@ -1,54 +1,19 @@
 """Drafts routes: generate, review, edit, send, and discard email drafts."""
 
-import asyncio
 import logging
-import os
-import re
 from datetime import datetime
 
-import aiofiles
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.database import get_db
 from models.draft import DraftEdit, DraftGenerateRequest, DraftOut
-from services import draft_service, gmail_service, obsidian_service
+from services import draft_service, gmail_service, memory_service
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/drafts", tags=["drafts"])
-
-
-async def embed_sent_email(draft: dict, sent_at: datetime) -> None:
-    """Write a sent email to the Obsidian vault for a permanent record.
-
-    Best-effort and non-blocking by contract: callers must not let a failure
-    here fail the send. No-op when no vault is configured.
-    """
-    vault = obsidian_service.vault_path()
-    if vault is None:
-        return
-
-    sent_dir = vault / "Sent"
-    await asyncio.to_thread(os.makedirs, sent_dir, exist_ok=True)
-
-    subject = draft.get("subject") or "No Subject"
-    to_email = draft.get("to_email") or ""
-    safe_subject = re.sub(r"[^\w\s-]", "", subject)[:60].strip() or "No Subject"
-    file_path = sent_dir / f"{sent_at.strftime('%Y-%m-%d')}-{safe_subject}.md"
-
-    contact = to_email.split("@")[0] if to_email else "Unknown"
-    content = (
-        f"# {subject}\n\n"
-        f"*Sent: {sent_at.strftime('%B %d, %Y at %I:%M %p')} · To: {to_email}*\n\n"
-        f"## Content\n\n{draft.get('body') or ''}\n\n"
-        f"## Related\n- [[{contact}]]\n"
-    )
-
-    async with aiofiles.open(file_path, "w", encoding="utf-8") as handle:
-        await handle.write(content)
-    logger.info("Sent email embedded to Obsidian: %s", file_path)
 
 _DRAFT_COLUMNS = (
     "id, account_id, to_email, subject, body, thread_email_id, status, "
@@ -154,12 +119,18 @@ async def send_draft(draft_id: int, db: AsyncSession = Depends(get_db)):
         logger.exception("Sending draft %s failed", draft_id)
         raise HTTPException(status_code=502, detail=f"Failed to send email: {exc}") from exc
 
-    # Record the sent email in Obsidian before returning. Best-effort: a vault
+    # Record the sent email in memory before returning. Best-effort: a memory
     # write must never fail a send that already succeeded.
     try:
-        await embed_sent_email(dict(draft), datetime.utcnow())
+        await memory_service.write_sent_email_note(
+            to_email=draft["to_email"] or "",
+            subject=draft["subject"] or "",
+            body=draft["body"] or "",
+            sent_at=datetime.utcnow(),
+            db=db,
+        )
     except Exception:  # noqa: BLE001
-        logger.exception("Embedding sent draft %s to Obsidian failed", draft_id)
+        logger.exception("Recording sent draft %s to memory failed", draft_id)
 
     updated = await db.execute(
         text(

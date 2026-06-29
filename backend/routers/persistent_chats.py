@@ -1,9 +1,9 @@
 """Persistent chat routes — long-lived conversations that survive the daily reset.
 
 Unlike ``/chat`` (which only keeps today's messages), these conversations are
-stored forever, listed on the /chat page, and mirrored into the Obsidian vault
-under ``Chats/{title}.md``. Each message reuses the exact same RAG context and
-system-prompt builder as the daily chat so answers stay consistent.
+stored forever, listed on the /chat page, and mirrored into the memory layer
+under a ``Chats/{title}`` note. Each message reuses the exact same RAG context
+and system-prompt builder as the daily chat so answers stay consistent.
 """
 
 import logging
@@ -20,7 +20,7 @@ from services import (
     claude_service,
     contact_service,
     gmail_service,
-    obsidian_service,
+    memory_service,
     provider_service,
     settings_service,
 )
@@ -47,7 +47,7 @@ async def _get_chat(chat_id: str, db: AsyncSession) -> dict:
     result = await db.execute(
         text(
             """
-            SELECT id, title, auto_titled, obsidian_note_path, created_at, updated_at
+            SELECT id, title, auto_titled, created_at, updated_at
             FROM persistent_chats WHERE id = :id
             """
         ),
@@ -126,7 +126,7 @@ async def get_chat(chat_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.delete("/{chat_id}")
 async def delete_chat(chat_id: str, db: AsyncSession = Depends(get_db)):
-    """Delete a chat and its messages. The Obsidian note is left untouched."""
+    """Delete a chat and its messages. The memory note is left untouched."""
     await _get_chat(chat_id, db)
     await db.execute(
         text("DELETE FROM persistent_chats WHERE id = :id"), {"id": chat_id}
@@ -215,7 +215,7 @@ async def send_message(chat_id: str, payload: MessageIn, db: AsyncSession = Depe
         accounts = []
 
     calendar_context = await _calendar_context(db)
-    obsidian_context = await obsidian_service.get_obsidian_context(user_message, db)
+    memory_context = await memory_service.get_general_context(user_message, db)
     tier = 2 if any(p in user_message.lower() for p in _DEEP_PHRASES) else 1
     email_context, context_source = await _get_context_tiered(user_message, db, tier=tier)
     contact_context = await contact_service.get_contact_context(user_message, db)
@@ -223,7 +223,7 @@ async def send_message(chat_id: str, payload: MessageIn, db: AsyncSession = Depe
 
     system = claude_service.build_system_prompt(
         calendar_context=calendar_context,
-        obsidian_context=obsidian_context,
+        memory_context=memory_context,
         email_context=email_context,
         contact_context=contact_context,
         accounts=accounts,
@@ -269,29 +269,19 @@ async def send_message(chat_id: str, payload: MessageIn, db: AsyncSession = Depe
     )
     await db.commit()
 
-    # Mirror into the Obsidian vault (best-effort, no vault → no-op).
+    # Mirror into the memory layer (best-effort). write_persistent_chat_note
+    # appends to the note by title, so the first exchange creates it and later
+    # ones extend it.
     try:
         title_for_note = new_title or chat["title"] or "Untitled conversation"
-        note_path = chat["obsidian_note_path"]
-        if is_first_exchange or not note_path:
-            created_path = await obsidian_service.write_chat_note(
-                title=title_for_note,
-                created_at=chat["created_at"],
-                updated_at=chat["updated_at"],
-                user_message=user_message,
-                assistant_message=reply,
-            )
-            if created_path:
-                await db.execute(
-                    text(
-                        "UPDATE persistent_chats SET obsidian_note_path = :path WHERE id = :id"
-                    ),
-                    {"path": created_path, "id": chat_id},
-                )
-                await db.commit()
-        else:
-            await obsidian_service.append_to_chat_note(note_path, user_message, reply)
+        await memory_service.write_persistent_chat_note(
+            chat_id=str(chat_id),
+            title=title_for_note,
+            user_message=user_message,
+            assistant_message=reply,
+            db=db,
+        )
     except Exception:  # noqa: BLE001 — never fail a chat over a note write
-        logger.exception("Persistent-chat Obsidian mirror failed")
+        logger.exception("Persistent-chat memory mirror failed")
 
     return {"content": reply, "title": new_title}
