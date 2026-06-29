@@ -9,6 +9,7 @@ import {
   HiOutlineHome,
   HiOutlineInboxArrowDown,
   HiOutlineLink,
+  HiOutlineShare,
   HiOutlineUsers,
 } from 'react-icons/hi2'
 import { NavLink } from 'react-router-dom'
@@ -24,6 +25,7 @@ interface NavItem {
 const NAV_SECTIONS: NavItem[][] = [
   [
     { path: '/', label: 'Home', icon: HiOutlineHome },
+    { path: '/graph', label: 'Graph', icon: HiOutlineShare },
     { path: '/analytics', label: 'Analytics', icon: HiOutlineChartBar },
   ],
   [

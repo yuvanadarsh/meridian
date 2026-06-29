@@ -188,6 +188,37 @@ export interface Contact {
   topics: string[] | null
 }
 
+export interface GraphNode {
+  id: string
+  type: 'user' | 'contact'
+  label: string
+  email: string
+  emailCount: number
+  topics: string[]
+  sentCount: number
+  receivedCount: number
+}
+
+export interface GraphEdge {
+  source: string
+  target: string
+  weight: number
+  sharedThreads: number
+}
+
+export interface GraphData {
+  nodes: GraphNode[]
+  edges: GraphEdge[]
+  stats: { totalContacts: number; totalEdges: number }
+}
+
+export interface GraphContactThread {
+  id: number
+  subject: string | null
+  last_message_at: string | null
+  message_count: number
+}
+
 export interface CalendarEvent {
   id: number
   title: string | null
@@ -537,6 +568,11 @@ export const api = {
       `/persistent-chats/${id}/messages`,
       { method: 'POST', body: JSON.stringify({ content }) },
     ),
+
+  // Knowledge graph
+  getGraphData: () => request<GraphData>('/graph/data'),
+  getContactThreads: (contactId: number) =>
+    request<GraphContactThread[]>(`/graph/contact/${contactId}/threads`),
 
   // Scheduled tasks
   getTasks: () => request<{ tasks: ScheduledTask[] }>('/tasks'),
